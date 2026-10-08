@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "ekkostech.terminal-tint",
+  "name": "Terminal Tint",
+  "version": "0.1.0",
+  "author": "ekkostech",
+  "license": "MIT",
+  "description": "Color-code running terminal windows. A picker with live window previews tints any terminal's background and border on the fly, without restarting what runs inside.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "TerminalTint.qml"
+  }
+}

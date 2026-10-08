@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# terminal-tint: script the Terminal Tint plugin from a shell or a keybinding.
+#
+#   terminal-tint                      open the picker
+#   terminal-tint red                  tint the focused terminal
+#   terminal-tint next                 cycle the focused terminal through the hues
+#   terminal-tint reset                clear the focused terminal
+#   terminal-tint blue --title Atlas   tint every terminal whose title contains "Atlas"
+#   terminal-tint '#203040' --pid 1234 any hex color; target a terminal by pid
+#   terminal-tint reset --all          clear every terminal
+#   terminal-tint borders on|off       follow the tint with the window border
+#   terminal-tint --list               show terminals and their tints
+#
+# Hues: red orange amber green teal blue purple pink
+
+set -euo pipefail
+
+id="ekkostech.terminal-tint"
+
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+call() {
+  local out
+  out=$(omarchy-shell shell call "$id" "$1" "$2")
+  if [[ $out == unknown ]]; then
+    echo "terminal-tint: plugin not loaded; run: omarchy plugin enable $id" >&2
+    exit 1
+  fi
+  [[ $out == error* ]] && { echo "terminal-tint: $out" >&2; exit 1; }
+  return 0
+}
+
+case ${1:-} in
+  "") exec omarchy-shell shell toggle "$id" '{}' ;;
+  -h|--help) usage ;;
+  --list)
+    call state "" # the first call starts a fresh scan
+    sleep 0.3
+    omarchy-shell shell call "$id" state "" |
+      jq -r '.terminals[] | [.workspace, .pty, (if .tint == "" then "-" else .tint end), .title] | @tsv'
+    exit ;;
+  borders)
+    case ${2:-} in on) call setBorders true ;; off) call setBorders false ;; *) usage 1 ;; esac
+    exit ;;
+esac
+
+value=$1; shift
+target=focused
+while (($#)); do
+  case $1 in
+    --title) target="title:${2:?--title needs text}"; shift 2 ;;
+    --pid) target="pid:${2:?--pid needs a number}"; shift 2 ;;
+    --address) target="address:${2:?--address needs a window address}"; shift 2 ;;
+    --all) target=all; shift ;;
+    *) usage 1 ;;
+  esac
+done
+
+call apply "$(jq -cn --arg value "$value" --arg target "$target" '{value: $value, target: $target}')"
