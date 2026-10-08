@@ -12,7 +12,8 @@ import "Palette.js" as Palette
 // plus, in Ghostty, its own wallpaper. Looks are escape sequences written to
 // the window's pty (OSC 4/10/11/12), so the program inside keeps running
 // untouched. Wallpapers are a per-window Ghostty config file that the window
-// reloads on SIGUSR2. The window border can follow the look.
+// reloads on SIGUSR2. The window border can follow the look, and pulses when
+// an agent in that terminal finishes and waits for you.
 Item {
   id: root
 
@@ -32,6 +33,7 @@ Item {
 
   // Settings kept in ~/.config/omarchy/terminal-tint.json.
   property bool borders: true
+  property bool pulse: true
   property real strength: Palette.DEFAULT_STRENGTH
   property bool withWallpaper: true
   property bool welcomed: false
@@ -49,6 +51,14 @@ Item {
   property string setupMessage: ""
   property var pendingWallpaper: null
   property var reshowPtys: []
+
+  // Needs-you pulse: windows whose agent finished (title went from a spinner to
+  // ✳) or rang the bell, pulsing until they get focus.
+  property var pulses: ({})        // address -> {started, color, look}
+  property var agentStates: ({})   // address -> working | idle | other
+  property var pendingPulses: []
+  property string activeAddress: Hyprland.activeToplevel ? Hyprland.activeToplevel.address : ""
+  readonly property bool pulsing: Object.keys(pulses).length > 0
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/terminal-tint"
@@ -198,10 +208,18 @@ Item {
     return "ok"
   }
 
+  function setPulse(enabled) {
+    root.pulse = enabled === true || enabled === "true"
+    root.saveConfig()
+    if (!root.pulse) for (var addr in root.pulses) root.stopPulse(addr)
+    return "ok"
+  }
+
   function validSpec(v) {
     return v === "next" || v === "reset" || Palette.tintLook(v) !== null
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
+      || v === "pulse:now" || v === "pulse:stop"
   }
 
   // A look for a spec, { wait: true } while its data loads, or { error }.
@@ -238,6 +256,13 @@ Item {
       if (req.value === "next") {
         for (var j = 0; j < hits.length; j++)
           root.commit(root.indexOf(hits[j].pty), Palette.tintLook(root.nextHue(hits[j].look)))
+        continue
+      }
+      if (req.value === "pulse:now" || req.value === "pulse:stop") {
+        for (var q = 0; q < hits.length; q++) {
+          if (req.value === "pulse:now") root.startPulse(hits[q])
+          else root.stopPulse(hits[q].address)
+        }
         continue
       }
       if (req.value.indexOf("wallpaper:") === 0) {
@@ -291,6 +316,11 @@ Item {
       root.current = Palette.focusedIndex(list)
     }
     root.current = Math.max(0, Math.min(root.current, list.length - 1))
+    var waiting = root.pendingPulses
+    root.pendingPulses = []
+    for (var w = 0; w < waiting.length; w++) {
+      for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w]) root.startPulse(list[t])
+    }
     root.runRequests(list)
     if (root.rescan) { root.rescan = false; root.scan() }
   }
@@ -405,6 +435,12 @@ Item {
     var term = root.update(index, { look: look })
     root.show(term, look)
     root.persist(term)
+    if (root.pulses[term.address]) {
+      var pulses = Object.assign({}, root.pulses)
+      pulses[term.address] = Object.assign({}, pulses[term.address],
+        { look: look, color: Palette.lookAccent(look) || root.accentHex })
+      root.pulses = pulses
+    }
   }
 
   // A mood or theme, with its wallpaper too when the window can take one.
@@ -558,11 +594,70 @@ Item {
     return null
   }
 
+  // ---- Needs-you pulse ---------------------------------------------------
+  readonly property string accentHex: "#" + String(Color.accent).replace(/^#/, "").slice(-6)
+
+  // Only terminals pulse, so check the window against a fresh scan first.
+  function requestPulse(address) {
+    if (!root.pulse || !address || address === root.activeAddress || root.pulses[address]) return
+    if (root.pendingPulses.indexOf(address) < 0) root.pendingPulses = root.pendingPulses.concat([address])
+    root.scan()
+  }
+
+  function startPulse(term) {
+    if (!term || !term.address || root.pulses[term.address]) return
+    var pulses = Object.assign({}, root.pulses)
+    pulses[term.address] = { started: Date.now(), look: term.look,
+                             color: Palette.lookAccent(term.look) || root.accentHex }
+    root.pulses = pulses
+  }
+
+  // Stop pulsing and give the window its usual border back.
+  function stopPulse(address) {
+    var p = root.pulses[address]
+    if (!p) return
+    root.dropPulse(address)
+    root.paintBorder({ address: address }, p.look)
+  }
+
+  function dropPulse(address) {
+    if (!root.pulses[address]) return
+    var pulses = Object.assign({}, root.pulses)
+    delete pulses[address]
+    root.pulses = pulses
+  }
+
+  function onPulseTick() {
+    var now = Date.now()
+    for (var addr in root.pulses) {
+      var p = root.pulses[addr]
+      var c = Palette.pulseColor(p.color, root.themeBackground, now - p.started)
+      Hyprland.dispatch(Palette.borderCommand("active_border_color", addr, c, "ff"))
+      Hyprland.dispatch(Palette.borderCommand("inactive_border_color", addr, c, "ff"))
+    }
+  }
+
+  function onAgentTitle(data) {
+    var comma = data.indexOf(",")
+    if (comma < 0) return
+    var addr = data.slice(0, comma)
+    var state = Palette.agentState(data.slice(comma + 1))
+    var prev = root.agentStates[addr]
+    if (prev !== state) {
+      var states = Object.assign({}, root.agentStates)
+      states[addr] = state
+      root.agentStates = states
+    }
+    if (prev === "working" && state === "idle") root.requestPulse(addr)
+    else if (state === "working") root.stopPulse(addr)
+  }
+
   // ---- Config and first run ---------------------------------------------
   function saveConfig() {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, strength: root.strength, withWallpaper: root.withWallpaper, welcomed: root.welcomed
+        borders: root.borders, pulse: root.pulse, strength: root.strength,
+        withWallpaper: root.withWallpaper, welcomed: root.welcomed
       })]
     configWriter.running = true
   }
@@ -571,6 +666,7 @@ Item {
     try {
       var cfg = JSON.parse(text)
       if (cfg && typeof cfg.borders === "boolean") root.borders = cfg.borders
+      if (cfg && typeof cfg.pulse === "boolean") root.pulse = cfg.pulse
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
@@ -732,6 +828,7 @@ Item {
   Timer { id: previewEnd; interval: 80; onTriggered: root.endPreview() }
   Timer { id: wallpaperPreview; interval: 250; onTriggered: root.onWallpaperPreview() }
   Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
+  Timer { interval: 70; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
 
   Connections {
     target: Color
@@ -741,7 +838,21 @@ Item {
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (event.name === "configreloaded") reapplyLater.restart()
+      var data = String(event.data || "").trim()
+      switch (event.name) {
+      case "configreloaded": reapplyLater.restart(); break
+      case "activewindowv2": root.activeAddress = data; root.stopPulse(data); break
+      case "closewindow":
+        root.dropPulse(data)
+        if (root.agentStates[data]) {
+          var states = Object.assign({}, root.agentStates)
+          delete states[data]
+          root.agentStates = states
+        }
+        break
+      case "urgent": root.requestPulse(data); break
+      case "windowtitlev2": root.onAgentTitle(data); break
+      }
     }
   }
 
@@ -907,6 +1018,7 @@ Item {
           else if (k === Qt.Key_Backtab) root.nextTab(-1)
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
           else if (k === Qt.Key_B) root.setBorders(!root.borders)
+          else if (k === Qt.Key_P) root.setPulse(!root.pulse)
           else if (n === 0) return
           else if (k === Qt.Key_Right || k === Qt.Key_L) root.current = (root.current + 1) % n
           else if (k === Qt.Key_Left || k === Qt.Key_H) root.current = (root.current - 1 + n) % n
@@ -942,21 +1054,41 @@ Item {
               font.bold: true
             }
 
-            Text {
+            Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              text: root.borders ? "Borders on" : "Borders off"
-              color: bordersHover.containsMouse ? root.text : root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              spacing: Style.space(16)
 
-              MouseArea {
-                id: bordersHover
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.setBorders(!root.borders)
+              Text {
+                text: root.pulse ? "Pulse when done on" : "Pulse when done off"
+                color: pulseHover.containsMouse ? root.text : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+
+                MouseArea {
+                  id: pulseHover
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.setPulse(!root.pulse)
+                }
+              }
+
+              Text {
+                text: root.borders ? "Borders on" : "Borders off"
+                color: bordersHover.containsMouse ? root.text : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+
+                MouseArea {
+                  id: bordersHover
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.setBorders(!root.borders)
+                }
               }
             }
           }
@@ -1473,7 +1605,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab moods/themes/wallpapers · W mood wallpaper · B borders · Esc"
+              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab moods/themes/wallpapers · W mood wallpaper · B borders · P pulse · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

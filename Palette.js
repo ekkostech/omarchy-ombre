@@ -242,6 +242,29 @@ function sequence(look, themeBackground) {
   return out + osc("10;" + p.foreground) + osc("11;" + p.background) + osc("12;" + p.cursor);
 }
 
+// ---- Needs-you pulse ----------------------------------------------------------
+
+// Agents such as Claude Code put a spinner (◐ ◓ ◑ ◒) at the front of the
+// window title while they work and ✳ once they're waiting. Ghostty puts 🔔 in
+// front after a bell.
+function agentState(title) {
+  var t = String(title || "").replace(/^\uD83D\uDD14\s*/, "");
+  var c = t.charAt(0);
+  if ("\u25D0\u25D1\u25D2\u25D3".indexOf(c) >= 0) return "working";
+  if (c === "\u2733") return "idle";
+  return "other";
+}
+
+// The border color at a moment of the pulse: a slow breath between a dim and a
+// bright version of the accent, about 1.6 seconds per cycle.
+var PULSE_PERIOD_MS = 1600;
+function pulseColor(accent, themeBackground, elapsedMs) {
+  var t = 0.5 - 0.5 * Math.cos(2 * Math.PI * (elapsedMs % PULSE_PERIOD_MS) / PULSE_PERIOD_MS);
+  var dim = mix(themeBackground, accent, 0.3);
+  var bright = mix(accent, isLight(themeBackground) ? "#000000" : "#ffffff", 0.35);
+  return mix(dim, bright, t);
+}
+
 // Hyprland's Lua dispatcher: set or clear a per-window property.
 function borderCommand(prop, address, color, alpha) {
   var v = color ? JSON.stringify("rgba(" + color.replace(/^#/, "") + alpha + ")") : "-1";

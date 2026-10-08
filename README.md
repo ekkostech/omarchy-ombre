@@ -26,6 +26,7 @@ mood or theme to try it on the real window, click to keep it.
 - **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength (Faint, Soft, Medium, Strong) keeps text readable on light and dark pictures.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
 - **Matching borders**: the Hyprland border takes the look's accent color (press `B` to turn it off).
+- **Pulses when an agent is done**: when an agent finishes and waits for you, its terminal's border breathes in its own color until you click into it. Works with agents that show a spinner in the window title (like Claude Code) and with any program that rings the terminal bell. Press `P` to turn it off.
 - **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
 - **Scriptable**: `terminal-tint red --title api` from a shell, a keybinding or an agent.
 
@@ -77,6 +78,7 @@ o.bind("SUPER + ALT + T", "Terminal Tint", "omarchy-shell shell toggle ekkostech
 | `W` / `Shift+W` | Next / previous wallpaper to make moods from |
 | Arrows / `hjkl` | Move between terminals |
 | `B` | Borders on/off |
+| `P` | Pulse when an agent is done, on/off |
 | `Esc` / `Enter` | Close |
 
 The terminal you were in is selected when the picker opens. The tint dots sit on
@@ -110,6 +112,7 @@ terminal-tint wallpaper none
 terminal-tint --looks              # list moods, themes and wallpapers
 terminal-tint --check              # what's installed and what's missing
 terminal-tint borders off
+terminal-tint pulse off            # or on; 'pulse now --title api' to try it
 terminal-tint --list
 ```
 
@@ -147,6 +150,12 @@ windows started by the launcher. Omarchy's theme switch reloads Ghostty the same
 way, so wallpapers survive it. `terminal-tint setup-ghostty --undo` reverts the
 setup.
 
+The pulse watches Hyprland's window events. A title that switches from a
+spinner (`◐ ◓ ◑ ◒`) to `✳` means an agent finished, and an `urgent` event means
+the window rang the bell. Either starts the pulse unless the window already has
+focus. Focusing the window, or the agent starting work again, stops it. Ghostty
+reports bells by default; foot only with `[bell] urgent=yes` in `foot.ini`.
+
 Looks are recorded per pty in `$XDG_RUNTIME_DIR/terminal-tint/` so the picker
 can show them. Each record is tied to the terminal's pid, so a reused pty starts
 clean. The border setting is saved in `~/.config/omarchy/terminal-tint.json`.
@@ -158,6 +167,7 @@ clean. The border setting is saved in `~/.config/omarchy/terminal-tint.json`.
 - **Alacritty, Kitty**: should work for tints, moods and themes, since they also run one process per window and support the same escape codes. Not tested yet.
 - **foot `--server` / `footclient`**: every window shares one process, so its windows can't be told apart. They're left out of the picker.
 - A program that sets its own colors (a few TUIs do) overrides the look while it runs.
+- Hyprland 0.56 draws only one color for a per-window border, so borders are solid rather than gradients.
 - Moods made from a wallpaper show its colors in any terminal; the picture itself only appears in Ghostty.
 
 ## Uninstall
