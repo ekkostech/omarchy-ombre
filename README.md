@@ -20,7 +20,7 @@ mood or theme to try it on the real window, click to keep it.
 ## Features
 
 - **Live previews**: every terminal appears as a live thumbnail, on any workspace.
-- **See which window you're picking**: the desktop dims around the selected terminal and outlines it with its name, on whichever monitor it's on. The picker moves aside so it doesn't cover it, and a terminal on another workspace is marked as not on screen.
+- **See which window you're picking**: the desktop dims around the selected terminal and outlines it with its name, on whichever monitor it's on. A terminal on another workspace is marked as not on screen.
 - **Try before you pick**: hovering a swatch, mood or theme changes the actual window. Move away and it goes back.
 - **Aether moods**: Fire, Ocean, Forest, Neon, Sunset, Vaporwave, Midnight, Aurora and the rest of Aether's modes, generated from your current wallpaper or any wallpaper in Aether's library.
 - **Themes per terminal**: give one terminal Tokyo Night and another Gruvbox. Every installed Omarchy theme is listed with its wallpaper, including themes Aether made.

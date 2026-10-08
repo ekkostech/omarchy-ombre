@@ -1070,22 +1070,9 @@ Item {
 
     MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
 
-    // Keep the picker off the selected window: if it's on this screen, sit in
-    // the other half when there's room.
-    readonly property var target: root.selectedTerm && root.selectedTerm.visible
-      && panel.screen && root.selectedTerm.monitor === panel.screen.name ? root.selectedTerm : null
-    readonly property real centeredY: (height - card.height) / 2
-    readonly property real cardY: {
-      var margin = Style.gapsOut * 4
-      if (!target || card.height > height * 0.62) return centeredY
-      return target.ly + target.h / 2 < height / 2 ? height - card.height - margin : margin
-    }
-
     BorderSurface {
       id: card
-      x: (panel.width - width) / 2
-      y: panel.cardY
-      Behavior on y { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+      anchors.centerIn: parent
       width: Math.min(content.implicitWidth + root.pad * 2, panel.width - Style.gapsOut * 4)
       height: Math.min(content.implicitHeight + root.pad * 2, panel.height - Style.gapsOut * 4)
       radius: Style.cornerRadius
