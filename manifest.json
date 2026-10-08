@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ekkostech.terminal-tint",
   "name": "Terminal Tint",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "ekkostech",
   "license": "MIT",
   "description": "Give each running terminal its own look (a tint, an Aether mood, an Omarchy theme or, in Ghostty, its own wallpaper) and a border that pulses when its agent is done. Picked with live previews, without restarting what runs inside.",

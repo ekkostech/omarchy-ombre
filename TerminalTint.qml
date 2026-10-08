@@ -294,9 +294,10 @@ Item {
     var a = output.indexOf("\n@@PS@@\n")
     var b = output.indexOf("\n@@STATE@@\n")
     var c = output.indexOf("\n@@GHOSTTY@@\n")
-    if (a < 0 || b < 0 || c < 0) return null
+    var d = output.indexOf("\n@@MONITORS@@\n")
+    if (a < 0 || b < 0 || c < 0 || d < 0) return null
     var list = Palette.terminals(output.slice(0, a), output.slice(a + 8, b), output.slice(b + 11, c),
-                                 output.slice(c + 13), root.runtimeDir)
+                                 output.slice(c + 13, d), root.runtimeDir, output.slice(d + 14))
     for (var i = 0; i < list.length; i++) {
       var k = root.known[list[i].pty]
       if (k && k.pid === list[i].pid) {
@@ -702,7 +703,8 @@ Item {
     'hyprctl -j clients; printf "\\n@@PS@@\\n"; ps -e -o pid=,ppid=,tty=; printf "\\n@@STATE@@\\n"; '
     + 'for f in "$1"/pts-*; do [ -f "$f" ] && printf "%s %s\\n" "${f##*/}" "$(cat "$f")"; done; '
     + 'printf "\\n@@GHOSTTY@@\\n"; '
-    + 'for p in $(pgrep -x ghostty); do printf "%s\\t%s\\n" "$p" "$(tr "\\0" " " < /proc/$p/cmdline 2>/dev/null)"; done; true'
+    + 'for p in $(pgrep -x ghostty); do printf "%s\\t%s\\n" "$p" "$(tr "\\0" " " < /proc/$p/cmdline 2>/dev/null)"; done; '
+    + 'printf "\\n@@MONITORS@@\\n"; hyprctl -j monitors; true'
 
   readonly property string catalogScript:
     'printf "@@WALLPAPER %s\\n" "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n'
@@ -972,6 +974,84 @@ Item {
     }
   }
 
+  // While the picker is open every monitor dims, except a cut-out around the
+  // selected terminal with a ring and its name, so you can see which real
+  // window a card is. It sits on the Top layer, under the picker's Overlay.
+  Variants {
+    model: Quickshell.screens
+
+    delegate: PanelWindow {
+      id: spot
+      required property var modelData
+      screen: modelData
+      visible: root.opened
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "transparent"
+      exclusionMode: ExclusionMode.Ignore
+      WlrLayershell.namespace: "omarchy-terminal-tint-spotlight"
+      WlrLayershell.layer: WlrLayer.Top
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+      readonly property var term: root.selectedTerm
+      readonly property bool here: term !== null && term.visible === true && term.monitor === modelData.name
+      readonly property int gap: Style.space(5)
+      readonly property color scrim: Color.menu.scrim
+      readonly property color ring: (term && Palette.lookAccent(term.look)) || root.accent
+
+      // The cut-out shrinks to the middle of the screen when the selection is elsewhere.
+      property real hx: here ? term.lx - gap : width / 2
+      property real hy: here ? term.ly - gap : height / 2
+      property real hw: here ? term.w + gap * 2 : 0
+      property real hh: here ? term.h + gap * 2 : 0
+      Behavior on hx { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+      Behavior on hy { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+      Behavior on hw { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+      Behavior on hh { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+
+      Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, spot.hy); color: spot.scrim }
+      Rectangle { x: 0; y: spot.hy + spot.hh; width: parent.width; height: Math.max(0, parent.height - spot.hy - spot.hh); color: spot.scrim }
+      Rectangle { x: 0; y: spot.hy; width: Math.max(0, spot.hx); height: spot.hh; color: spot.scrim }
+      Rectangle { x: spot.hx + spot.hw; y: spot.hy; width: Math.max(0, parent.width - spot.hx - spot.hw); height: spot.hh; color: spot.scrim }
+
+      Rectangle {
+        x: spot.hx
+        y: spot.hy
+        width: spot.hw
+        height: spot.hh
+        color: "transparent"
+        radius: Style.cornerRadius
+        border.width: Math.max(2, Style.space(3))
+        border.color: spot.ring
+        opacity: spot.here ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        Rectangle {
+          x: Style.space(10)
+          y: Style.space(10)
+          width: Math.min(nameText.implicitWidth + Style.space(16), parent.width - Style.space(20))
+          height: nameText.implicitHeight + Style.space(8)
+          radius: height / 2
+          color: spot.ring
+
+          Text {
+            id: nameText
+            anchors.centerIn: parent
+            width: parent.width - Style.space(16)
+            horizontalAlignment: Text.AlignHCenter
+            text: spot.term ? spot.term.title : ""
+            elide: Text.ElideRight
+            color: Palette.isLight(String(spot.ring)) ? "#000000" : "#ffffff"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+        }
+      }
+
+      MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+    }
+  }
+
   PanelWindow {
     id: panel
     visible: root.opened
@@ -988,13 +1068,24 @@ Item {
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
 
-    Rectangle { anchors.fill: parent; color: Color.menu.scrim }
-
     MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+
+    // Keep the picker off the selected window: if it's on this screen, sit in
+    // the other half when there's room.
+    readonly property var target: root.selectedTerm && root.selectedTerm.visible
+      && panel.screen && root.selectedTerm.monitor === panel.screen.name ? root.selectedTerm : null
+    readonly property real centeredY: (height - card.height) / 2
+    readonly property real cardY: {
+      var margin = Style.gapsOut * 4
+      if (!target || card.height > height * 0.62) return centeredY
+      return target.ly + target.h / 2 < height / 2 ? height - card.height - margin : margin
+    }
 
     BorderSurface {
       id: card
-      anchors.centerIn: parent
+      x: (panel.width - width) / 2
+      y: panel.cardY
+      Behavior on y { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
       width: Math.min(content.implicitWidth + root.pad * 2, panel.width - Style.gapsOut * 4)
       height: Math.min(content.implicitHeight + root.pad * 2, panel.height - Style.gapsOut * 4)
       radius: Style.cornerRadius
@@ -1298,7 +1389,9 @@ Item {
               Text {
                 id: appliesText
                 width: Math.min(implicitWidth, root.contentWidth * 0.45)
-                text: root.selectedTerm ? "for " + root.selectedTerm.title : ""
+                text: !root.selectedTerm ? ""
+                : "for " + root.selectedTerm.title + (root.selectedTerm.visible ? ""
+                  : " · on workspace " + root.selectedTerm.workspace + ", not on screen")
                 elide: Text.ElideRight
                 color: root.muted
                 font.family: root.fontFamily

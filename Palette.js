@@ -350,10 +350,28 @@ function ghosttyPids(ghosttyText, runtimeDir) {
   return out;
 }
 
-function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir) {
+// `hyprctl -j monitors` by id: name, layout position and the workspaces showing.
+function monitorsById(monitorsText) {
+  var out = {};
+  var list;
+  try { list = JSON.parse(monitorsText); } catch (e) { return out; }
+  if (!Array.isArray(list)) return out;
+  for (var i = 0; i < list.length; i++) {
+    var m = list[i];
+    out[m.id] = {
+      name: String(m.name || ""), x: m.x || 0, y: m.y || 0,
+      active: m.activeWorkspace ? m.activeWorkspace.id : null,
+      special: m.specialWorkspace && m.specialWorkspace.id ? m.specialWorkspace.id : null
+    };
+  }
+  return out;
+}
+
+function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir, monitorsText) {
   var clients;
   try { clients = JSON.parse(clientsText); } catch (e) { return []; }
   if (!Array.isArray(clients)) return [];
+  var monitors = monitorsById(monitorsText);
   var procs = processes(psText);
   var state = parseState(stateText);
   var ghostty = ghosttyPids(ghosttyText, runtimeDir);
@@ -365,6 +383,8 @@ function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir) {
     if (!pty) continue;
     var saved = state[pty];
     var mine = saved && saved.pid === String(c.pid);
+    var mon = monitors[c.monitor] || null;
+    var wsId = c.workspace ? c.workspace.id : null;
     out.push({
       address: String(c.address || "").replace(/^0x/, ""),
       pid: String(c.pid),
@@ -377,6 +397,11 @@ function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir) {
       y: c.at ? c.at[1] : 0,
       w: c.size ? c.size[0] : 16,
       h: c.size ? c.size[1] : 9,
+      // Where the window sits on its monitor, and whether it's on screen now.
+      monitor: mon ? mon.name : "",
+      lx: c.at && mon ? c.at[0] - mon.x : 0,
+      ly: c.at && mon ? c.at[1] - mon.y : 0,
+      visible: !!mon && c.hidden !== true && (wsId === mon.active || (mon.special !== null && wsId === mon.special)),
       ghostty: ghostty.all[String(c.pid)] === true,
       wallpaperReady: ghostty.ready[String(c.pid)] === true,
       look: mine ? saved.look : null,
