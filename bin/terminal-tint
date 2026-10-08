@@ -5,13 +5,13 @@
 #   terminal-tint red                  tint the focused terminal
 #   terminal-tint next                 cycle the focused terminal through the hues
 #   terminal-tint reset                clear the focused terminal
-#   terminal-tint blue --title Atlas   tint every terminal whose title contains "Atlas"
+#   terminal-tint blue --title api     tint every terminal whose title contains "api"
 #   terminal-tint '#203040' --pid 1234 any hex color; target a terminal by pid
 #   terminal-tint reset --all          clear every terminal
 #   terminal-tint mood:fire            an Aether mood from the current wallpaper
 #   terminal-tint mood:ocean@/path/to/wallpaper.jpg
 #   terminal-tint theme:tokyo-night    any installed Omarchy theme
-#   terminal-tint wallpaper /path/to/wallpaper.jpg [--strength 0.4]   Ghostty only
+#   terminal-tint wallpaper /path/to/wallpaper.jpg [--strength 0.15]  Ghostty only
 #   terminal-tint wallpaper none       remove the focused terminal's wallpaper
 #   terminal-tint setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
 #   terminal-tint borders on|off       follow the look with the window border
@@ -68,7 +68,7 @@ target=focused
 strength=""
 while (($#)); do
   case $1 in
-    --strength) strength="${2:?--strength needs a number from 0.05 to 1}"; shift 2 ;;
+    --strength) strength="${2:?--strength needs a number from 0.01 to 1 (soft is 0.08)}"; shift 2 ;;
     --title) target="title:${2:?--title needs text}"; shift 2 ;;
     --pid) target="pid:${2:?--pid needs a number}"; shift 2 ;;
     --address) target="address:${2:?--address needs a window address}"; shift 2 ;;

@@ -1353,9 +1353,9 @@ Item {
                 model: Palette.STRENGTHS
                 delegate: TextButton {
                   required property var modelData
-                  label: Math.round(modelData * 100) + "%"
-                  chosen: root.strength === modelData
-                  onActivated: root.setStrength(modelData)
+                  label: modelData.name
+                  chosen: root.strength === modelData.value
+                  onActivated: root.setStrength(modelData.value)
                 }
               }
             }

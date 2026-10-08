@@ -12,6 +12,8 @@ That's handy when a handful of coding agents are going at once.
 > (`omarchy install terminal ghostty`) and a one-time setup from the picker.
 > The plugin says so in a notification the first time it loads.
 
+![Four agents, four looks: Tokyo Night with its wallpaper, an Aether mood over the Kanagawa wave, Gruvbox with its wallpaper, and a plain purple tint](preview.jpg)
+
 Press a key and a picker shows every terminal with a live preview. Hover a color,
 mood or theme to try it on the real window, click to keep it.
 
@@ -21,11 +23,11 @@ mood or theme to try it on the real window, click to keep it.
 - **Try before you pick**: hovering a swatch, mood or theme changes the actual window. Move away and it goes back.
 - **Aether moods**: Fire, Ocean, Forest, Neon, Sunset, Vaporwave, Midnight, Aurora and the rest of Aether's modes, generated from your current wallpaper or any wallpaper in Aether's library.
 - **Themes per terminal**: give one terminal Tokyo Night and another Gruvbox. Every installed Omarchy theme is listed with its wallpaper, including themes Aether made.
-- **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength is adjustable so text stays readable.
+- **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength (Faint, Soft, Medium, Strong) keeps text readable on light and dark pictures.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
 - **Matching borders**: the Hyprland border takes the look's accent color (press `B` to turn it off).
 - **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
-- **Scriptable**: `terminal-tint red --title Atlas` from a shell, a keybinding or an agent.
+- **Scriptable**: `terminal-tint red --title api` from a shell, a keybinding or an agent.
 
 ## Install
 
@@ -87,13 +89,13 @@ ln -s ~/.config/omarchy/plugins/ekkostech.terminal-tint/bin/terminal-tint ~/.loc
 terminal-tint                      # open the picker
 terminal-tint red                  # tint the focused terminal
 terminal-tint next                 # cycle the focused terminal
-terminal-tint blue --title Atlas   # every terminal whose title contains "Atlas"
+terminal-tint blue --title api     # every terminal whose title contains "api"
 terminal-tint '#203040' --pid 1234 # any hex color, by terminal pid
 terminal-tint reset --all          # clear everything
-terminal-tint mood:fire --title Atlas
+terminal-tint mood:fire --title docs
 terminal-tint mood:ocean@/path/to/wallpaper.jpg
 terminal-tint theme:tokyo-night --pid 1234
-terminal-tint wallpaper ~/Wallpapers/forest.jpg --strength 0.4   # Ghostty
+terminal-tint wallpaper ~/Wallpapers/forest.jpg --strength 0.15  # Ghostty
 terminal-tint wallpaper none
 terminal-tint --looks              # list moods, themes and wallpapers
 terminal-tint borders off
@@ -101,7 +103,7 @@ terminal-tint --list
 ```
 
 Under the hood these call
-`omarchy-shell shell call ekkostech.terminal-tint apply '{"value":"red","target":"title:Atlas"}'`.
+`omarchy-shell shell call ekkostech.terminal-tint apply '{"value":"red","target":"title:api"}'`.
 The targets are `focused`, `title:TEXT`, `pid:N`, `address:HEX` and `all`. The
 values are a hue name, `#rrggbb`, `next`, `reset`, `mood:NAME[@WALLPAPER]`,
 `theme:NAME`, `wallpaper:/path/to/image.jpg` or `wallpaper:none`.

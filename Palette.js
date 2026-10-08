@@ -200,9 +200,16 @@ function lookLabel(look) {
 // ---- Wallpapers (Ghostty only) ----------------------------------------------
 
 // { path, strength }: an image file and how strongly it shows through the
-// background color (Ghostty's background-image-opacity).
-var STRENGTHS = [0.15, 0.25, 0.4, 0.6];
-var DEFAULT_STRENGTH = 0.25;
+// background color (Ghostty's background-image-opacity). Ghostty shows images
+// far brighter than the number suggests: a light wallpaper at 0.4 drowns the
+// text. Hence a low scale with names instead of percentages.
+var STRENGTHS = [
+  { value: 0.04, name: "Faint" },
+  { value: 0.08, name: "Soft" },
+  { value: 0.15, name: "Medium" },
+  { value: 0.3,  name: "Strong" }
+];
+var DEFAULT_STRENGTH = 0.08;
 
 function isImagePath(path) {
   var p = String(path || "");
@@ -213,7 +220,7 @@ function normalizeWallpaper(w) {
   if (!w || typeof w !== "object" || !isImagePath(w.path)) return null;
   var strength = Number(w.strength);
   if (!isFinite(strength)) strength = DEFAULT_STRENGTH;
-  return { path: String(w.path), strength: Math.round(Math.max(0.05, Math.min(1, strength)) * 100) / 100 };
+  return { path: String(w.path), strength: Math.round(Math.max(0.01, Math.min(1, strength)) * 100) / 100 };
 }
 
 function sameWallpaper(a, b) {
