@@ -27,6 +27,7 @@ mood or theme to try it on the real window, click to keep it.
 - **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength (Faint, Soft, Medium, Strong) keeps text readable on light and dark pictures.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
 - **Matching borders**: the Hyprland border takes the look's accent color, bright on the focused window and dark on the others so you can still see focus move (press `B` to turn it off).
+- **A default for new terminals**: new terminals can open with a saved look (and wallpaper), or each get a different tint automatically so new agents never look alike. Set it in the picker's New terminals tab.
 - **Pulses when an agent is done**: when an agent finishes and waits for you, its terminal's border breathes in its own color until you click into it. Works with agents that show a spinner in the window title (like Claude Code) and with any program that rings the terminal bell. Press `P` to turn it off.
 - **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
 - **Scriptable**: `terminal-tint red --title api` from a shell, a keybinding or an agent.
@@ -75,9 +76,10 @@ o.bind("SUPER + ALT + T", "Terminal Tint", "omarchy-shell shell toggle ekkostech
 | `0` / `Backspace` | Back to the terminal's own colors |
 | `N` | Next tint |
 | `Space` / `Shift+Space` | Next / previous mood, theme or wallpaper |
-| `Tab` | Switch between Moods, Themes and Wallpapers |
+| `Tab` | Switch between Moods, Themes, Wallpapers and New terminals |
 | `W` / `Shift+W` | Next / previous wallpaper to make moods from |
 | Arrows / `hjkl` | Move between terminals |
+| `D` | Save the selected terminal's look as the default for new terminals |
 | `B` | Borders on/off |
 | `P` | Pulse when an agent is done, on/off |
 | `Esc` / `Enter` | Close |
@@ -114,6 +116,9 @@ terminal-tint --looks              # list moods, themes and wallpapers
 terminal-tint --check              # what's installed and what's missing
 terminal-tint borders off
 terminal-tint pulse off            # or on; 'pulse now --title api' to try it
+terminal-tint default auto         # new terminals each get a different tint
+terminal-tint default from         # new terminals copy the focused terminal's look
+terminal-tint default none
 terminal-tint --list
 ```
 

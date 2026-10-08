@@ -17,6 +17,9 @@
 #   terminal-tint borders on|off       follow the look with the window border
 #   terminal-tint pulse on|off         pulse a terminal's border when its agent finishes
 #   terminal-tint pulse now|stop       start or stop a pulse by hand (with a target)
+#   terminal-tint default none|auto    what new terminals get: nothing, or a different tint each
+#   terminal-tint default from         new terminals copy the focused (or targeted) terminal's look
+#   terminal-tint default theme:nord   new terminals get this look (any look value)
 #   terminal-tint --list               show terminals and their looks
 #   terminal-tint --looks              list the moods, themes and wallpapers
 #   terminal-tint --check              what's installed, and what moods and wallpapers still need
@@ -28,7 +31,7 @@ set -euo pipefail
 
 id="ekkostech.terminal-tint"
 
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -77,6 +80,12 @@ case ${1:-} in
   borders)
     case ${2:-} in on) call setBorders true ;; off) call setBorders false ;; *) usage 1 ;; esac
     exit ;;
+  default)
+    case ${2:-} in
+      none|auto) call setDefaultMode "$2"; exit ;;
+      "") usage 1 ;;
+      *) set -- "default:$2" "${@:3}" ;;
+    esac ;;
   pulse)
     case ${2:-} in
       on) call setPulse true; exit ;;

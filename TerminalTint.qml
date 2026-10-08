@@ -86,7 +86,15 @@ Item {
 
   readonly property var selectedTerm: current >= 0 && current < terminals.length ? terminals[current] : null
   readonly property bool selectedTakesWallpaper: selectedTerm !== null && selectedTerm.wallpaperReady
-  readonly property var tabs: ["moods", "themes", "wallpapers"]
+  readonly property var tabs: ["moods", "themes", "wallpapers", "default"]
+
+  // What a newly opened terminal gets: none, auto (the least-used tint), or a
+  // saved look with an optional wallpaper. Terminals already open when the
+  // plugin starts are left alone.
+  property var newDefault: ({ mode: "none", look: null, wallpaper: null })
+  property var seen: ({})          // address -> true for terminals already handled
+  property bool seenReady: false
+  property int newWindowTries: 0
   property bool tabChosen: false
   readonly property var moodSources: {
     var out = []
@@ -220,6 +228,8 @@ Item {
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
       || v === "pulse:now" || v === "pulse:stop"
+      || v === "default:from"
+      || (v.indexOf("default:") === 0 && v !== "default:next" && v !== "default:reset" && root.validSpec(v.slice(8)))
   }
 
   // A look for a spec, { wait: true } while its data loads, or { error }.
@@ -256,6 +266,17 @@ Item {
       if (req.value === "next") {
         for (var j = 0; j < hits.length; j++)
           root.commit(root.indexOf(hits[j].pty), Palette.tintLook(root.nextHue(hits[j].look)))
+        continue
+      }
+      if (req.value === "default:from") {
+        if (hits.length > 0) root.saveDefaultFrom(hits[0])
+        continue
+      }
+      if (req.value.indexOf("default:") === 0) {
+        var d = root.resolveSpec(req.value.slice(8))
+        if (d.wait) { waiting.push(req); continue }
+        if (d.error) { console.warn("terminal-tint:", d.error); continue }
+        root.setDefaultLook(d.look, null)
         continue
       }
       if (req.value === "pulse:now" || req.value === "pulse:stop") {
@@ -322,6 +343,7 @@ Item {
     for (var w = 0; w < waiting.length; w++) {
       for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w]) root.startPulse(list[t])
     }
+    root.applyDefaults(list)
     root.runRequests(list)
     if (root.rescan) { root.rescan = false; root.scan() }
   }
@@ -534,6 +556,81 @@ Item {
     if (term && term.wallpaper) root.setWallpaper(root.current, { path: term.wallpaper.path, strength: value })
   }
 
+  // ---- Default look for new terminals -----------------------------------
+  function markSeen(list) {
+    var seen = Object.assign({}, root.seen)
+    for (var i = 0; i < list.length; i++) seen[list[i].address] = true
+    root.seen = seen
+    root.seenReady = true
+  }
+
+  function applyDefaults(list) {
+    if (!root.seenReady) return
+    var fresh = list.filter(function (t) { return !root.seen[t.address] })
+    if (fresh.length === 0) return
+    root.markSeen(fresh)
+    if (root.newDefault.mode === "none") return
+    for (var i = 0; i < fresh.length; i++) {
+      var t = fresh[i]
+      if (t.look || t.wallpaper) continue
+      var index = root.indexOf(t.pty)
+      if (root.newDefault.mode === "auto") {
+        root.commit(index, Palette.tintLook(root.leastUsedHue()))
+      } else if (root.newDefault.mode === "look") {
+        if (root.newDefault.look) root.commit(index, root.newDefault.look)
+        if (root.newDefault.wallpaper && t.wallpaperReady) root.setWallpaper(index, root.newDefault.wallpaper)
+      }
+    }
+  }
+
+  // The tint fewest open terminals wear, first in palette order on a tie.
+  function leastUsedHue() {
+    var counts = {}
+    for (var i = 0; i < root.terminals.length; i++) {
+      var l = root.terminals[i].look
+      if (l && l.kind === "tint" && Palette.hue(l.id)) counts[l.id] = (counts[l.id] || 0) + 1
+    }
+    var best = Palette.HUES[0].id
+    for (var h = 0; h < Palette.HUES.length; h++)
+      if ((counts[Palette.HUES[h].id] || 0) < (counts[best] || 0)) best = Palette.HUES[h].id
+    return best
+  }
+
+  function setDefaultMode(mode) {
+    if (mode === "look" && !root.newDefault.look && !root.newDefault.wallpaper) {
+      if (root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
+      return "ok"
+    }
+    if (mode !== "none" && mode !== "auto" && mode !== "look") return "error: mode is none, auto or look"
+    root.newDefault = Object.assign({}, root.newDefault, { mode: mode })
+    root.saveConfig()
+    return "ok"
+  }
+
+  function setDefaultLook(look, wallpaper) {
+    root.newDefault = { mode: "look", look: Palette.normalizeLook(look), wallpaper: Palette.normalizeWallpaper(wallpaper) }
+    root.saveConfig()
+  }
+
+  function saveDefaultFrom(term) {
+    if (!term || (!term.look && !term.wallpaper)) {
+      root.hoverText = "Give this terminal a look first, then save it as the default."
+      return
+    }
+    root.setDefaultLook(term.look, term.wallpaper)
+    root.hoverText = "New terminals will open as " + root.defaultLabel
+  }
+
+  readonly property string defaultLabel: {
+    var d = root.newDefault
+    if (d.mode === "auto") return "a different tint each"
+    if (d.mode !== "look") return "their own colors"
+    var parts = []
+    if (d.look) parts.push(d.look.kind === "tint" ? Palette.lookLabel(d.look) : Palette.pretty(d.look.id))
+    if (d.wallpaper) parts.push(Palette.basename(d.wallpaper.path) + " wallpaper")
+    return parts.join(" with ") || "their own colors"
+  }
+
   // Space and Shift+Space walk the list on the open tab for the selected terminal.
   function stepLook(delta) {
     var term = root.selectedTerm
@@ -594,6 +691,7 @@ Item {
       else if (root.repaintAll) root.paintBorder(list[i], null)
     }
     root.repaintAll = false
+    root.markSeen(list)
     if (root.opened) root.terminals = list
   }
 
@@ -677,7 +775,7 @@ Item {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
       "sh", root.configFile, JSON.stringify({
         borders: root.borders, pulse: root.pulse, strength: root.strength,
-        withWallpaper: root.withWallpaper, welcomed: root.welcomed
+        withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault
       })]
     configWriter.running = true
   }
@@ -690,6 +788,14 @@ Item {
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
+      if (cfg && cfg.newTerminals && typeof cfg.newTerminals === "object") {
+        var mode = cfg.newTerminals.mode
+        root.newDefault = {
+          mode: mode === "auto" || mode === "look" ? mode : "none",
+          look: Palette.normalizeLook(cfg.newTerminals.look),
+          wallpaper: Palette.normalizeWallpaper(cfg.newTerminals.wallpaper)
+        }
+      }
     } catch (e) { }
     if (!root.configLoaded) {
       root.repaintAll = true
@@ -855,6 +961,15 @@ Item {
   Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
   Timer { interval: 70; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
   Timer { id: restoreAgain; interval: 250; onTriggered: root.onRestoreAgain() }
+  Timer {
+    id: newWindowScan
+    interval: 600
+    repeat: true
+    onTriggered: {
+      root.scan()
+      if (--root.newWindowTries <= 0) stop()
+    }
+  }
 
   Connections {
     target: Color
@@ -877,6 +992,9 @@ Item {
         }
         break
       case "urgent": root.requestPulse(data); break
+      case "openwindow":
+        if (root.newDefault.mode !== "none") { root.newWindowTries = 8; newWindowScan.restart() }
+        break
       case "windowtitlev2": root.onAgentTitle(data); break
       }
     }
@@ -1143,6 +1261,7 @@ Item {
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
           else if (k === Qt.Key_B) root.setBorders(!root.borders)
           else if (k === Qt.Key_P) root.setPulse(!root.pulse)
+          else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (n === 0) return
           else if (k === Qt.Key_Right || k === Qt.Key_L) root.current = (root.current + 1) % n
           else if (k === Qt.Key_Left || k === Qt.Key_H) root.current = (root.current - 1 + n) % n
@@ -1393,7 +1512,7 @@ Item {
                 delegate: TabButton {
                   required property var modelData
                   name: modelData
-                  text: Palette.pretty(modelData)
+                  text: modelData === "default" ? "New terminals" : Palette.pretty(modelData)
                 }
               }
             }
@@ -1403,7 +1522,7 @@ Item {
               spacing: Style.space(14)
 
               Text {
-                visible: root.tab !== "wallpapers" && root.selectedTakesWallpaper
+                visible: (root.tab === "moods" || root.tab === "themes") && root.selectedTakesWallpaper
                 text: (root.withWallpaper ? "\uDB80\uDD32" : "\uDB80\uDD31") + " with its wallpaper"
                 color: withArea.containsMouse ? root.text : root.muted
                 font.family: root.fontFamily
@@ -1727,11 +1846,76 @@ Item {
             }
           }
 
+          // What newly opened terminals get.
+          Column {
+            visible: root.tab === "default"
+            width: parent.width
+            spacing: Style.space(10)
+
+            Text {
+              text: "When a new terminal opens, give it:"
+              color: root.text
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Row {
+              spacing: Style.space(8)
+
+              TextButton {
+                label: "Its own colors"
+                chosen: root.newDefault.mode === "none"
+                onActivated: root.setDefaultMode("none")
+              }
+              TextButton {
+                label: "A different tint each"
+                chosen: root.newDefault.mode === "auto"
+                onActivated: root.setDefaultMode("auto")
+              }
+              TextButton {
+                label: "A saved look"
+                chosen: root.newDefault.mode === "look"
+                onActivated: root.setDefaultMode("look")
+              }
+            }
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: root.newDefault.mode === "auto"
+                ? "Each new terminal gets the tint the fewest open terminals have, so new agents never look alike."
+                : root.newDefault.mode === "look"
+                  ? "New terminals open as " + root.defaultLabel + "."
+                  : "New terminals keep their usual colors."
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(10)
+
+              TextButton {
+                label: root.selectedTerm ? "Save the look of \u201c" + root.selectedTerm.title.slice(0, 40) + "\u201d as the default" : "Save as default"
+                opacity: root.selectedTerm && (root.selectedTerm.look || root.selectedTerm.wallpaper) ? 1 : 0.4
+                onActivated: if (root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "or press D"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+
           Text {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab moods/themes/wallpapers · W mood wallpaper · B borders · P pulse · Esc"
+              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · B borders · P pulse · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
