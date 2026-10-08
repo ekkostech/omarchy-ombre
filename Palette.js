@@ -1,17 +1,25 @@
 .pragma library
 
-// Hues are vivid accents. A terminal background is the theme background with
-// a little of the hue mixed in, so every tint stays readable on light and dark
-// themes alike; the window border gets the full-strength hue.
+// A look is what a terminal wears:
+//   { kind: "tint",  id: "blue" | "#rrggbb" }
+//   { kind: "mood",  id: "fire", source: "/path/to/wallpaper.jpg", palette }
+//   { kind: "theme", id: "tokyo-night", palette }
+// palette = { background, foreground, cursor, accent, colors: [16 x "#rrggbb"] }
+// null means the terminal's own configured colors.
+//
+// Tints only change the background: the theme background with a little of the
+// hue mixed in, so text stays readable on light and dark themes. Moods (from
+// Aether) and themes replace the whole palette. The window border takes the
+// look's accent.
 var HUES = [
-  { id: "red",    name: "Red",    hex: "#e5484d", key: "1" },
-  { id: "orange", name: "Orange", hex: "#f76b15", key: "2" },
-  { id: "amber",  name: "Amber",  hex: "#ffc53d", key: "3" },
-  { id: "green",  name: "Green",  hex: "#46a758", key: "4" },
-  { id: "teal",   name: "Teal",   hex: "#12a594", key: "5" },
-  { id: "blue",   name: "Blue",   hex: "#3e63dd", key: "6" },
-  { id: "purple", name: "Purple", hex: "#8e4ec6", key: "7" },
-  { id: "pink",   name: "Pink",   hex: "#d6409f", key: "8" }
+  { id: "red",    name: "Red",    hex: "#e5484d" },
+  { id: "orange", name: "Orange", hex: "#f76b15" },
+  { id: "amber",  name: "Amber",  hex: "#ffc53d" },
+  { id: "green",  name: "Green",  hex: "#46a758" },
+  { id: "teal",   name: "Teal",   hex: "#12a594" },
+  { id: "blue",   name: "Blue",   hex: "#3e63dd" },
+  { id: "purple", name: "Purple", hex: "#8e4ec6" },
+  { id: "pink",   name: "Pink",   hex: "#d6409f" }
 ];
 
 var DARK_STRENGTH = 0.18;
@@ -19,6 +27,10 @@ var LIGHT_STRENGTH = 0.14;
 
 function isHex(value) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || ""));
+}
+
+function isName(value) {
+  return /^[A-Za-z0-9._-]+$/.test(String(value || ""));
 }
 
 function hue(id) {
@@ -31,10 +43,7 @@ function hueIndex(id) {
   return -1;
 }
 
-// A tint value is a hue id or a "#rrggbb" color; anything else is no tint.
-function isValue(value) {
-  return hue(value) !== null || isHex(value);
-}
+// ---- Color math -----------------------------------------------------------
 
 // QML colors stringify as #rrggbb, or #aarrggbb when translucent.
 function rgb(color) {
@@ -65,25 +74,141 @@ function mix(base, over, amount) {
               a[2] + (b[2] - a[2]) * amount]);
 }
 
-// Terminal background for a tint value on the given theme background.
-function background(value, themeBackground) {
-  if (isHex(value)) return String(value).toLowerCase();
-  var h = hue(value);
-  if (!h) return "";
-  return mix(themeBackground, h.hex, isLight(themeBackground) ? LIGHT_STRENGTH : DARK_STRENGTH);
+function chroma(color) {
+  var c = rgb(color);
+  return Math.max(c[0], c[1], c[2]) - Math.min(c[0], c[1], c[2]);
 }
 
-// Full-strength color used for the window border and the swatch ring.
-function accent(value) {
-  if (isHex(value)) return String(value).toLowerCase();
-  var h = hue(value);
-  return h ? h.hex : "";
+function mostChromatic(list) {
+  var best = list[0];
+  for (var i = 1; i < list.length; i++) if (chroma(list[i]) > chroma(best)) best = list[i];
+  return best;
 }
 
-function label(value) {
-  var h = hue(value);
-  if (h) return h.name;
-  return isHex(value) ? String(value).toLowerCase() : "None";
+// ---- Palettes ---------------------------------------------------------------
+
+function validPalette(p) {
+  if (!p || !isHex(p.background) || !isHex(p.foreground) || !isHex(p.cursor) || !isHex(p.accent)) return false;
+  if (!Array.isArray(p.colors) || p.colors.length !== 16) return false;
+  for (var i = 0; i < 16; i++) if (!isHex(p.colors[i])) return false;
+  return true;
+}
+
+function copyPalette(p) {
+  return {
+    background: p.background.toLowerCase(),
+    foreground: p.foreground.toLowerCase(),
+    cursor: p.cursor.toLowerCase(),
+    accent: p.accent.toLowerCase(),
+    colors: p.colors.map(function (c) { return c.toLowerCase(); })
+  };
+}
+
+// Aether palettes are the 16 ANSI colors: 0 is the background, 7 the text.
+function aetherPalette(colors) {
+  if (!Array.isArray(colors) || colors.length < 16) return null;
+  var c = colors.slice(0, 16).map(function (x) { return String(x).toLowerCase(); });
+  for (var i = 0; i < 16; i++) if (!isHex(c[i])) return null;
+  return { background: c[0], foreground: c[7], cursor: c[15], accent: mostChromatic(c.slice(1, 7)), colors: c };
+}
+
+function parseToml(text) {
+  var out = {};
+  var lines = String(text || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var m = lines[i].match(/^\s*([A-Za-z0-9_]+)\s*=\s*"([^"]*)"/);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+// Omarchy colors.toml, mapped onto the 16 colors the way Omarchy's own foot
+// template does. Older themes that list color0..color15 use those directly.
+function themePalette(t) {
+  if (!isHex(t.background) || !isHex(t.foreground)) return null;
+  function pick(key, fallback) { return isHex(t[key]) ? t[key].toLowerCase() : fallback; }
+  var bg = t.background.toLowerCase(), fg = t.foreground.toLowerCase();
+  var red = pick("red", fg), green = pick("green", fg), yellow = pick("yellow", fg);
+  var blue = pick("blue", fg), magenta = pick("purple", pick("magenta", fg)), cyan = pick("cyan", fg);
+  var colors = [bg, red, green, yellow, blue, magenta, cyan, fg,
+    pick("muted", mix(bg, fg, 0.4)), pick("bright_red", red), pick("bright_green", green),
+    pick("bright_yellow", yellow), pick("bright_blue", blue), pick("bright_magenta", magenta),
+    pick("bright_cyan", cyan), pick("bright_foreground", fg)];
+  for (var i = 0; i < 16; i++) colors[i] = pick("color" + i, colors[i]);
+  return { background: bg, foreground: fg, cursor: colors[15], accent: pick("accent", blue), colors: colors };
+}
+
+// ---- Looks ------------------------------------------------------------------
+
+function tintLook(id) {
+  if (hue(id)) return { kind: "tint", id: id };
+  if (isHex(id)) return { kind: "tint", id: String(id).toLowerCase() };
+  return null;
+}
+
+// Only the fields worth saving, validated; anything else is no look.
+function normalizeLook(look) {
+  if (!look || typeof look !== "object") return null;
+  if (look.kind === "tint") return tintLook(look.id);
+  if ((look.kind === "mood" || look.kind === "theme") && isName(look.id) && validPalette(look.palette)) {
+    var out = { kind: look.kind, id: look.id, palette: copyPalette(look.palette) };
+    if (look.kind === "mood") out.source = String(look.source || "");
+    return out;
+  }
+  return null;
+}
+
+function sameLook(a, b) {
+  if (!a || !b) return !a && !b;
+  return a.kind === b.kind && a.id === b.id && (a.kind !== "mood" || a.source === b.source);
+}
+
+function lookBackground(look, themeBackground) {
+  if (!look) return "";
+  if (look.kind === "tint") {
+    if (isHex(look.id)) return look.id;
+    var h = hue(look.id);
+    return h ? mix(themeBackground, h.hex, isLight(themeBackground) ? LIGHT_STRENGTH : DARK_STRENGTH) : "";
+  }
+  return look.palette.background;
+}
+
+function lookAccent(look) {
+  if (!look) return "";
+  if (look.kind === "tint") return isHex(look.id) ? look.id : hue(look.id).hex;
+  return look.palette.accent;
+}
+
+function pretty(id) {
+  return String(id || "").split(/[-_]/).map(function (w) {
+    return w ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+  }).join(" ");
+}
+
+function basename(path) {
+  var s = String(path || "");
+  return s.slice(s.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
+}
+
+function lookLabel(look) {
+  if (!look) return "";
+  if (look.kind === "tint") return hue(look.id) ? hue(look.id).name : look.id;
+  if (look.kind === "mood") return pretty(look.id) + " · " + basename(look.source);
+  return pretty(look.id);
+}
+
+// The escape sequence that makes a terminal wear a look. OSC 4/10/11/12 set the
+// palette, text, background and cursor; 104/110/111/112 put them back.
+var ESC = "\u001b";
+function osc(body) { return ESC + "]" + body + ESC + "\\"; }
+
+function sequence(look, themeBackground) {
+  var reset = osc("104") + osc("110") + osc("112");
+  if (!look) return reset + osc("111");
+  if (look.kind === "tint") return reset + osc("11;" + lookBackground(look, themeBackground));
+  var p = look.palette, out = "";
+  for (var i = 0; i < 16; i++) out += osc("4;" + i + ";" + p.colors[i]);
+  return out + osc("10;" + p.foreground) + osc("11;" + p.background) + osc("12;" + p.cursor);
 }
 
 // Hyprland's Lua dispatcher: set or clear a per-window property.
@@ -92,6 +217,8 @@ function borderCommand(prop, address, color, alpha) {
   return "hl.dsp.window.set_prop({ prop = " + JSON.stringify(prop)
     + ", value = " + v + ", window = " + JSON.stringify("address:0x" + address) + " })";
 }
+
+// ---- Parsing shell output ---------------------------------------------------
 
 // Parse `ps -e -o pid=,ppid=,tty=` into { tty: pid -> tty, kids: ppid -> [tty] }.
 function processes(psText) {
@@ -125,16 +252,29 @@ function ptyFor(pid, procs) {
   return found;
 }
 
-// State lines look like "pts-5 1234 blue": the pty, the terminal pid that owned
-// it when tinted, and the tint value. A pty reused by a new terminal is ignored.
+// State lines are "pts-5 {"pid":"1234","look":{...}}": the terminal pid that
+// owned the pty when the look was set, so a pty reused by a new terminal is
+// ignored. Version 0.1 wrote "pts-5 1234 blue".
 function parseState(text) {
   var out = {};
   var lines = String(text || "").split("\n");
   for (var i = 0; i < lines.length; i++) {
-    var parts = lines[i].trim().split(/\s+/);
-    if (parts.length < 3 || !/^pts-[0-9]+$/.test(parts[0])) continue;
-    if (!isValue(parts[2])) continue;
-    out["pts/" + parts[0].slice(4)] = { pid: parts[1], value: parts[2] };
+    var line = lines[i].trim();
+    var m = line.match(/^pts-([0-9]+)\s+(.*)$/);
+    if (!m) continue;
+    var pid = "", look = null;
+    if (m[2].charAt(0) === "{") {
+      try {
+        var j = JSON.parse(m[2]);
+        pid = String(j.pid || "");
+        look = normalizeLook(j.look);
+      } catch (e) { continue; }
+    } else {
+      var parts = m[2].split(/\s+/);
+      pid = parts[0];
+      look = tintLook(parts[1]);
+    }
+    if (look) out["pts/" + m[1]] = { pid: pid, look: look };
   }
   return out;
 }
@@ -156,7 +296,7 @@ function terminals(clientsText, psText, stateText) {
       address: String(c.address || "").replace(/^0x/, ""),
       pid: String(c.pid),
       pty: pty,
-      title: String(c.title || c.class || "Terminal"),
+      title: String(c.title || c["class"] || "Terminal"),
       cls: String(c["class"] || ""),
       workspace: c.workspace ? c.workspace.name || String(c.workspace.id) : "",
       focused: c.focusHistoryID === 0,
@@ -164,7 +304,7 @@ function terminals(clientsText, psText, stateText) {
       y: c.at ? c.at[1] : 0,
       w: c.size ? c.size[0] : 16,
       h: c.size ? c.size[1] : 9,
-      value: saved && saved.pid === String(c.pid) ? saved.value : ""
+      look: saved && saved.pid === String(c.pid) ? saved.look : null
     });
   }
   out.sort(function (a, b) {
@@ -197,4 +337,89 @@ function match(list, target) {
     if (hit) out.push(term);
   }
   return out;
+}
+
+// The catalog script prints sections:
+//   @@WALLPAPER <current wallpaper>
+//   @@MODES        then `aether --list-modes`        (only with Aether)
+//   @@WALLPAPERS   then `aether --list-wallpapers --json`
+//   @@THEME <name>\t<background image>   then that theme's colors.toml
+function parseCatalog(text) {
+  var out = { wallpaper: "", aether: false, modes: [], wallpapers: [], themes: [] };
+  var section = "", buf = [], theme = null, byName = {};
+
+  function flush() {
+    var body = buf.join("\n");
+    if (section === "modes") out.modes = parseModes(body);
+    else if (section === "wallpapers") {
+      try {
+        var j = JSON.parse(body);
+        out.wallpapers = (j.wallpapers || []).map(function (w) { return String(w.path || ""); })
+          .filter(function (p) { return p.length > 0; });
+      } catch (e) { }
+    } else if (section === "theme" && theme) {
+      var palette = themePalette(parseToml(body));
+      if (palette) byName[theme.id] = { kind: "theme", id: theme.id, image: theme.image, palette: palette };
+    }
+    buf = [];
+  }
+
+  var lines = String(text || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.indexOf("@@") !== 0) { buf.push(line); continue; }
+    flush();
+    if (line.indexOf("@@WALLPAPER ") === 0) { out.wallpaper = line.slice(12).trim(); section = ""; }
+    else if (line === "@@MODES") { section = "modes"; out.aether = true; }
+    else if (line === "@@WALLPAPERS") section = "wallpapers";
+    else if (line.indexOf("@@THEME ") === 0) {
+      var parts = line.slice(8).split("\t");
+      theme = isName(parts[0]) ? { id: parts[0], image: parts[1] || "" } : null;
+      section = "theme";
+    } else section = "";
+  }
+  flush();
+
+  for (var id in byName) out.themes.push(byName[id]);
+  out.themes.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+  return out;
+}
+
+// `aether --list-modes`: "  name   description" lines. The named moods (fire,
+// ocean, ...) describe themselves as "... mood: ..." and are listed first.
+function parseModes(text) {
+  var moods = [], others = [];
+  var lines = String(text || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var m = lines[i].match(/^\s+([a-z0-9-]+)\s+(.+)$/);
+    if (!m) continue;
+    var mode = { id: m[1], description: m[2].trim() };
+    (/\bmood:/i.test(mode.description) ? moods : others).push(mode);
+  }
+  return moods.concat(others);
+}
+
+// Mood batch output: "@@MODE name" followed by `aether --extract-palette --json`.
+function parseMoods(text, modes, source) {
+  var byId = {};
+  var blocks = String(text || "").split(/^@@MODE /m);
+  for (var i = 0; i < blocks.length; i++) {
+    var nl = blocks[i].indexOf("\n");
+    if (nl < 0) continue;
+    var id = blocks[i].slice(0, nl).trim();
+    try {
+      var palette = aetherPalette(JSON.parse(blocks[i].slice(nl + 1)).colors);
+      if (palette) byId[id] = palette;
+    } catch (e) { }
+  }
+  var out = [];
+  for (var j = 0; j < modes.length; j++) {
+    var p = byId[modes[j].id];
+    if (p) out.push({ kind: "mood", id: modes[j].id, source: source, description: modes[j].description, palette: p });
+  }
+  return out;
+}
+
+function fileUrl(path) {
+  return "file://" + String(path || "").split("/").map(encodeURIComponent).join("/");
 }

@@ -8,8 +8,12 @@
 #   terminal-tint blue --title Atlas   tint every terminal whose title contains "Atlas"
 #   terminal-tint '#203040' --pid 1234 any hex color; target a terminal by pid
 #   terminal-tint reset --all          clear every terminal
-#   terminal-tint borders on|off       follow the tint with the window border
-#   terminal-tint --list               show terminals and their tints
+#   terminal-tint mood:fire            an Aether mood from the current wallpaper
+#   terminal-tint mood:ocean@/path/to/wallpaper.jpg
+#   terminal-tint theme:tokyo-night    any installed Omarchy theme
+#   terminal-tint borders on|off       follow the look with the window border
+#   terminal-tint --list               show terminals and their looks
+#   terminal-tint --looks              list the moods and themes
 #
 # Hues: red orange amber green teal blue purple pink
 
@@ -17,7 +21,7 @@ set -euo pipefail
 
 id="ekkostech.terminal-tint"
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -37,7 +41,11 @@ case ${1:-} in
     call state "" # the first call starts a fresh scan
     sleep 0.3
     omarchy-shell shell call "$id" state "" |
-      jq -r '.terminals[] | [.workspace, .pty, (if .tint == "" then "-" else .tint end), .title] | @tsv'
+      jq -r '.terminals[] | [.workspace, .pty, (if .look == "" then "-" else .look end), .title] | @tsv'
+    exit ;;
+  --looks)
+    omarchy-shell shell call "$id" looks "" |
+      jq -r '"moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" "))'
     exit ;;
   borders)
     case ${2:-} in on) call setBorders true ;; off) call setBorders false ;; *) usage 1 ;; esac
