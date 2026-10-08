@@ -16,6 +16,7 @@
 #   terminal-tint setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
 #   terminal-tint borders on|off       follow the look with the window border
 #   terminal-tint pulse on|off         pulse a terminal's border when its agent finishes
+#   terminal-tint shadow on|off        drop shadow under the text (Ghostty windows)
 #   terminal-tint pulse now|stop       start or stop a pulse by hand (with a target)
 #   terminal-tint default none|auto    what new terminals get: nothing, or a different tint each
 #   terminal-tint default from         new terminals copy the focused (or targeted) terminal's look
@@ -31,7 +32,7 @@ set -euo pipefail
 
 id="ekkostech.terminal-tint"
 
-usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -86,6 +87,9 @@ case ${1:-} in
       "") usage 1 ;;
       *) set -- "default:$2" "${@:3}" ;;
     esac ;;
+  shadow)
+    case ${2:-} in on) call setTextShadow true ;; off) call setTextShadow false ;; *) usage 1 ;; esac
+    exit ;;
   pulse)
     case ${2:-} in
       on) call setPulse true; exit ;;

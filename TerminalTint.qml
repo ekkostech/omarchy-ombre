@@ -34,6 +34,8 @@ Item {
   // Settings kept in ~/.config/omarchy/terminal-tint.json.
   property bool borders: true
   property bool pulse: true
+  property bool textShadow: false
+  property bool reshadowAll: false
   property real strength: Palette.DEFAULT_STRENGTH
   property bool withWallpaper: true
   property bool welcomed: false
@@ -96,6 +98,7 @@ Item {
   property var seen: ({})          // address -> true for terminals already handled
   property bool seenReady: false
   property int newWindowTries: 0
+  property var awaiting: ({})     // addresses of new windows not yet seen in a scan
   property bool tabChosen: false
   readonly property var moodSources: {
     var out = []
@@ -218,6 +221,21 @@ Item {
     root.saveConfig()
     root.reapply()
     return "ok"
+  }
+
+  // Text shadow is a Ghostty shader, so it travels with the wallpaper config.
+  function setTextShadow(enabled) {
+    root.textShadow = enabled === true || enabled === "true"
+    root.saveConfig()
+    root.reshadowAll = true
+    root.scan()
+    return "ok"
+  }
+
+  function shadowVariant(term) {
+    if (!root.textShadow) return "-"
+    var bg = (term && Palette.lookBackground(term.look, root.themeBackground)) || root.themeBackground
+    return Palette.isLight(bg) ? "light" : "dark"
   }
 
   function setPulse(enabled) {
@@ -348,6 +366,11 @@ Item {
       for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w]) root.startPulse(list[t])
     }
     root.applyDefaults(list)
+    if (root.reshadowAll) {
+      root.reshadowAll = false
+      for (var r = 0; r < list.length; r++)
+        if (list[r].wallpaperReady) root.sendWallpaper(list[r], list[r].wallpaper)
+    }
     root.runRequests(list)
     if (root.rescan) { root.rescan = false; root.scan() }
   }
@@ -463,6 +486,7 @@ Item {
     var term = root.update(index, { look: look })
     root.show(term, look)
     root.persist(term)
+    if (root.textShadow && term.wallpaperReady) root.sendWallpaper(term, term.wallpaper)
     if (root.pulses[term.address]) {
       var pulses = Object.assign({}, root.pulses)
       pulses[term.address] = Object.assign({}, pulses[term.address],
@@ -484,7 +508,7 @@ Item {
   // pid really is Ghostty before signalling it.
   function sendWallpaper(term, wallpaper) {
     var w = Palette.normalizeWallpaper(wallpaper)
-    root.send("ghostty " + term.pid + " " + (w ? w.strength + " " + w.path : "- -"))
+    root.send("ghostty " + term.pid + " " + root.shadowVariant(term) + " " + (w ? w.strength + " " + w.path : "- -"))
     // Re-send the look once the reload settles, in case it reset the colors.
     if (root.reshowPtys.indexOf(term.pty) < 0) root.reshowPtys = root.reshowPtys.concat([term.pty])
     reshowLater.restart()
@@ -574,11 +598,16 @@ Item {
     var fresh = list.filter(function (t) { return !root.seen[t.address] })
     if (fresh.length === 0) return
     root.markSeen(fresh)
-    if (root.newDefault.mode === "none") return
+    var aw = Object.assign({}, root.awaiting)
+    for (var f = 0; f < fresh.length; f++) delete aw[fresh[f].address]
+    root.awaiting = aw
+    if (root.newDefault.mode === "none" && !root.textShadow) return
     for (var i = 0; i < fresh.length; i++) {
       var t = fresh[i]
-      if (t.look || t.wallpaper) continue
       var index = root.indexOf(t.pty)
+      if (root.textShadow && t.wallpaperReady && !t.wallpaper) root.sendWallpaper(t, null)
+      if (t.look || t.wallpaper) continue
+      if (root.newDefault.mode === "none") continue
       if (root.newDefault.mode === "auto") {
         root.commit(index, Palette.tintLook(root.leastUsedHue()))
       } else if (root.newDefault.mode === "look") {
@@ -779,7 +808,7 @@ Item {
   function saveConfig() {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, strength: root.strength,
+        borders: root.borders, pulse: root.pulse, textShadow: root.textShadow, strength: root.strength,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault
       })]
     configWriter.running = true
@@ -790,6 +819,7 @@ Item {
       var cfg = JSON.parse(text)
       if (cfg && typeof cfg.borders === "boolean") root.borders = cfg.borders
       if (cfg && typeof cfg.pulse === "boolean") root.pulse = cfg.pulse
+      if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
@@ -877,9 +907,10 @@ Item {
   //   write PTY SEQUENCE     escape sequence for the terminal (validated hex colors only)
   //   save PTY JSON          remember the look for the picker
   //   forget PTY
-  //   ghostty PID STRENGTH PATH | ghostty PID - -   per-window wallpaper, then SIGUSR2
+  //   ghostty PID SHADOW STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
+  //     SHADOW is dark, light or -; STRENGTH PATH are "- -" for no wallpaper
   readonly property string writerScript:
-    'mkdir -p "$1/ghostty"; d=$1\n'
+    'mkdir -p "$1/ghostty"; d=$1; plug=$2\n'
     + 'while IFS= read -r line; do\n'
     + '  op=${line%% *}; rest=${line#* }; key=${rest%% *}; arg=${rest#* }\n'
     + '  case $op in\n'
@@ -894,9 +925,13 @@ Item {
     + '    ghostty)\n'
     + '      case $key in ""|*[!0-9]*) continue ;; esac\n'
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
-    + '      strength=${arg%% *}; path=${arg#* }\n'
+    + '      shadow=${arg%% *}; rest=${arg#* }; strength=${rest%% *}; path=${rest#* }\n'
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
+    + '        case $shadow in dark|light)\n'
+    + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow"\n'
+    + '          echo "custom-shader-animation = false" ;;\n'
+    + '        esac\n'
     + '        if [ "$strength" != "-" ]; then\n'
     + '          printf "background-image = \\"%s\\"\\n" "$path"\n'
     + '          echo "background-image-fit = cover"\n'
@@ -910,7 +945,7 @@ Item {
     id: writer
     stdinEnabled: true
     running: true
-    command: ["sh", "-c", root.writerScript, "sh", root.runtimeDir]
+    command: ["sh", "-c", root.writerScript, "sh", root.runtimeDir, root.pluginDir]
     onExited: restartWriter.start()
   }
 
@@ -972,7 +1007,7 @@ Item {
     repeat: true
     onTriggered: {
       root.scan()
-      if (--root.newWindowTries <= 0) stop()
+      if (--root.newWindowTries <= 0 || Object.keys(root.awaiting).length === 0) { root.awaiting = ({}); stop() }
     }
   }
 
@@ -998,7 +1033,15 @@ Item {
         break
       case "urgent": root.requestPulse(data); break
       case "openwindow":
-        if (root.newDefault.mode !== "none") { root.newWindowTries = 8; newWindowScan.restart() }
+        // A window can take seconds to start its shell; keep looking until it
+        // shows up in a scan.
+        if (root.newDefault.mode !== "none" || root.textShadow) {
+          var aw = Object.assign({}, root.awaiting)
+          aw[data.split(",")[0]] = true
+          root.awaiting = aw
+          root.newWindowTries = 25
+          newWindowScan.restart()
+        }
         break
       case "windowtitlev2": root.onAgentTitle(data); break
       }
@@ -1266,6 +1309,7 @@ Item {
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
           else if (k === Qt.Key_B) root.setBorders(!root.borders)
           else if (k === Qt.Key_P) root.setPulse(!root.pulse)
+          else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (n === 0) return
           else if (k === Qt.Key_Right || k === Qt.Key_L) root.current = (root.current + 1) % n
@@ -1306,6 +1350,23 @@ Item {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(16)
+
+              Text {
+                visible: root.catalog.launcher
+                text: root.textShadow ? "Text shadow on" : "Text shadow off"
+                color: shadowHover.containsMouse ? root.text : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+
+                MouseArea {
+                  id: shadowHover
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.setTextShadow(!root.textShadow)
+                }
+              }
 
               Text {
                 text: root.pulse ? "Pulse when done on" : "Pulse when done off"
@@ -1920,7 +1981,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · B borders · P pulse · Esc"
+              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · B borders · P pulse · T text shadow · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
