@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Set Ghostty up for Terminal Tint wallpapers, or undo it with --undo.
+#
+# Wallpapers are a Ghostty config option, so each window needs its own Ghostty
+# process and its own config file. This installs a small launcher that starts
+# every window that way, and points Ghostty's desktop entry (which Omarchy's
+# Super+Return and xdg-terminal-exec use) at it. Windows opened before setup
+# keep working; only new ones can take wallpapers.
+
+set -euo pipefail
+
+launcher="$HOME/.local/bin/terminal-tint-ghostty"
+desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"
+system_desktop=/usr/share/applications/com.mitchellh.ghostty.desktop
+marker="# Written by Terminal Tint"
+
+if [[ ${1:-} == --undo ]]; then
+  if [[ -f $desktop ]] && grep -qx "$marker" "$desktop"; then rm -f "$desktop"; fi
+  rm -f "$launcher"
+  echo "Ghostty is back to its own launcher."
+  exit 0
+fi
+
+command -v ghostty >/dev/null || { echo "Ghostty is not installed: omarchy install terminal ghostty" >&2; exit 1; }
+[[ -f $system_desktop ]] || { echo "Can't find $system_desktop" >&2; exit 1; }
+if [[ -f $desktop ]] && ! grep -qx "$marker" "$desktop"; then
+  echo "$desktop already exists and wasn't written by Terminal Tint; leaving it alone." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$launcher")" "$(dirname "$desktop")"
+cat >"$launcher" <<'EOF'
+#!/bin/sh
+# Terminal Tint's Ghostty launcher: one process per window, each with its own
+# optional config file named after the process id. Terminal Tint writes a
+# wallpaper there and sends the window SIGUSR2, so one window's wallpaper can
+# change while the program inside keeps running.
+dir="${XDG_RUNTIME_DIR:-/tmp}/terminal-tint/ghostty"
+mkdir -p "$dir"
+for f in "$dir"/*.conf; do
+  [ -e "$f" ] || continue
+  pid=${f##*/}; pid=${pid%.conf}
+  kill -0 "$pid" 2>/dev/null || rm -f "$f"
+done
+exec ghostty --gtk-single-instance=false --config-file="?$dir/$$.conf" "$@"
+EOF
+chmod +x "$launcher"
+
+# Ghostty's own entry, with every Exec line pointing at the launcher. D-Bus
+# activation would bypass Exec and reuse one shared process, so it is off.
+{
+  echo "$marker"
+  sed -e "s|^Exec=/usr/bin/ghostty --gtk-single-instance=true|Exec=$launcher|" \
+      -e "s|^Exec=ghostty|Exec=$launcher|" \
+      -e "s|^DBusActivatable=true|DBusActivatable=false|" \
+      "$system_desktop"
+} >"$desktop"
+
+update-desktop-database "$(dirname "$desktop")" 2>/dev/null || true
+echo "Ghostty is set up for wallpapers. New Ghostty windows can take one."

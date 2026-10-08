@@ -197,6 +197,30 @@ function lookLabel(look) {
   return pretty(look.id);
 }
 
+// ---- Wallpapers (Ghostty only) ----------------------------------------------
+
+// { path, strength }: an image file and how strongly it shows through the
+// background color (Ghostty's background-image-opacity).
+var STRENGTHS = [0.15, 0.25, 0.4, 0.6];
+var DEFAULT_STRENGTH = 0.25;
+
+function isImagePath(path) {
+  var p = String(path || "");
+  return /^\//.test(p) && !/[\n"]/.test(p) && /\.(png|jpe?g)$/i.test(p);
+}
+
+function normalizeWallpaper(w) {
+  if (!w || typeof w !== "object" || !isImagePath(w.path)) return null;
+  var strength = Number(w.strength);
+  if (!isFinite(strength)) strength = DEFAULT_STRENGTH;
+  return { path: String(w.path), strength: Math.round(Math.max(0.05, Math.min(1, strength)) * 100) / 100 };
+}
+
+function sameWallpaper(a, b) {
+  if (!a || !b) return !a && !b;
+  return a.path === b.path && a.strength === b.strength;
+}
+
 // The escape sequence that makes a terminal wear a look. OSC 4/10/11/12 set the
 // palette, text, background and cursor; 104/110/111/112 put them back.
 var ESC = "\u001b";
@@ -252,7 +276,7 @@ function ptyFor(pid, procs) {
   return found;
 }
 
-// State lines are "pts-5 {"pid":"1234","look":{...}}": the terminal pid that
+// State lines are "pts-5 {"pid":"1234","look":{...},"wallpaper":{...}}": the terminal pid that
 // owned the pty when the look was set, so a pty reused by a new terminal is
 // ignored. Version 0.1 wrote "pts-5 1234 blue".
 function parseState(text) {
@@ -262,29 +286,47 @@ function parseState(text) {
     var line = lines[i].trim();
     var m = line.match(/^pts-([0-9]+)\s+(.*)$/);
     if (!m) continue;
-    var pid = "", look = null;
+    var pid = "", look = null, wallpaper = null;
     if (m[2].charAt(0) === "{") {
       try {
         var j = JSON.parse(m[2]);
         pid = String(j.pid || "");
         look = normalizeLook(j.look);
+        wallpaper = normalizeWallpaper(j.wallpaper);
       } catch (e) { continue; }
     } else {
       var parts = m[2].split(/\s+/);
       pid = parts[0];
       look = tintLook(parts[1]);
     }
-    if (look) out["pts/" + m[1]] = { pid: pid, look: look };
+    if (look || wallpaper) out["pts/" + m[1]] = { pid: pid, look: look, wallpaper: wallpaper };
   }
   return out;
 }
 
-function terminals(clientsText, psText, stateText) {
+// `pid<TAB>cmdline` lines for running Ghostty processes. A window can take a
+// wallpaper when Terminal Tint's launcher started it with its own config file.
+function ghosttyPids(ghosttyText, runtimeDir) {
+  var out = { all: {}, ready: {} };
+  var lines = String(ghosttyText || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var tab = lines[i].indexOf("\t");
+    if (tab < 0) continue;
+    var pid = lines[i].slice(0, tab).trim();
+    var want = "--config-file=?" + runtimeDir + "/ghostty/" + pid + ".conf";
+    out.all[pid] = true;
+    if (lines[i].slice(tab + 1).indexOf(want) >= 0) out.ready[pid] = true;
+  }
+  return out;
+}
+
+function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir) {
   var clients;
   try { clients = JSON.parse(clientsText); } catch (e) { return []; }
   if (!Array.isArray(clients)) return [];
   var procs = processes(psText);
   var state = parseState(stateText);
+  var ghostty = ghosttyPids(ghosttyText, runtimeDir);
   var out = [];
   for (var i = 0; i < clients.length; i++) {
     var c = clients[i];
@@ -292,6 +334,7 @@ function terminals(clientsText, psText, stateText) {
     var pty = ptyFor(c.pid, procs);
     if (!pty) continue;
     var saved = state[pty];
+    var mine = saved && saved.pid === String(c.pid);
     out.push({
       address: String(c.address || "").replace(/^0x/, ""),
       pid: String(c.pid),
@@ -304,7 +347,10 @@ function terminals(clientsText, psText, stateText) {
       y: c.at ? c.at[1] : 0,
       w: c.size ? c.size[0] : 16,
       h: c.size ? c.size[1] : 9,
-      look: saved && saved.pid === String(c.pid) ? saved.look : null
+      ghostty: ghostty.all[String(c.pid)] === true,
+      wallpaperReady: ghostty.ready[String(c.pid)] === true,
+      look: mine ? saved.look : null,
+      wallpaper: mine ? saved.wallpaper : null
     });
   }
   out.sort(function (a, b) {
@@ -343,9 +389,11 @@ function match(list, target) {
 //   @@WALLPAPER <current wallpaper>
 //   @@MODES        then `aether --list-modes`        (only with Aether)
 //   @@WALLPAPERS   then `aether --list-wallpapers --json`
+//   @@GHOSTTY      Ghostty is installed
+//   @@LAUNCHER     Terminal Tint's Ghostty launcher is set up
 //   @@THEME <name>\t<background image>   then that theme's colors.toml
 function parseCatalog(text) {
-  var out = { wallpaper: "", aether: false, modes: [], wallpapers: [], themes: [] };
+  var out = { wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] };
   var section = "", buf = [], theme = null, byName = {};
 
   function flush() {
@@ -371,6 +419,8 @@ function parseCatalog(text) {
     flush();
     if (line.indexOf("@@WALLPAPER ") === 0) { out.wallpaper = line.slice(12).trim(); section = ""; }
     else if (line === "@@MODES") { section = "modes"; out.aether = true; }
+    else if (line === "@@GHOSTTY") { out.ghostty = true; section = ""; }
+    else if (line === "@@LAUNCHER") { out.launcher = true; section = ""; }
     else if (line === "@@WALLPAPERS") section = "wallpapers";
     else if (line.indexOf("@@THEME ") === 0) {
       var parts = line.slice(8).split("\t");

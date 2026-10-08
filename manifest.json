@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "ekkostech.terminal-tint",
   "name": "Terminal Tint",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "ekkostech",
   "license": "MIT",
-  "description": "Give each running terminal its own look: a background tint, an Aether mood from a wallpaper, or a whole Omarchy theme, picked with live previews and without restarting what runs inside.",
+  "description": "Give each running terminal its own look: a background tint, an Aether mood, a whole Omarchy theme or, in Ghostty, its own wallpaper. Picked with live previews, without restarting what runs inside. Wallpapers require Ghostty.",
   "kinds": [
     "overlay"
   ],

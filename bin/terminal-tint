@@ -11,17 +11,21 @@
 #   terminal-tint mood:fire            an Aether mood from the current wallpaper
 #   terminal-tint mood:ocean@/path/to/wallpaper.jpg
 #   terminal-tint theme:tokyo-night    any installed Omarchy theme
+#   terminal-tint wallpaper /path/to/wallpaper.jpg [--strength 0.4]   Ghostty only
+#   terminal-tint wallpaper none       remove the focused terminal's wallpaper
+#   terminal-tint setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
 #   terminal-tint borders on|off       follow the look with the window border
 #   terminal-tint --list               show terminals and their looks
-#   terminal-tint --looks              list the moods and themes
+#   terminal-tint --looks              list the moods, themes and wallpapers
 #
 # Hues: red orange amber green teal blue purple pink
+# Targets (any command): --title TEXT, --pid N, --address HEX, --all
 
 set -euo pipefail
 
 id="ekkostech.terminal-tint"
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -45,8 +49,15 @@ case ${1:-} in
     exit ;;
   --looks)
     omarchy-shell shell call "$id" looks "" |
-      jq -r '"moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" "))'
+      jq -r '"moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" ")), "wallpapers:", (.wallpapers[] | "  " + .)'
     exit ;;
+  setup-ghostty)
+    shift
+    exec "$(dirname "$(readlink -f "$0")")/terminal-tint-setup-ghostty" "$@" ;;
+  wallpaper)
+    [[ -n ${2:-} ]] || usage 1
+    if [[ $2 == none ]]; then set -- "wallpaper:none" "${@:3}"
+    else set -- "wallpaper:$(readlink -f "$2")" "${@:3}"; fi ;;
   borders)
     case ${2:-} in on) call setBorders true ;; off) call setBorders false ;; *) usage 1 ;; esac
     exit ;;
@@ -54,8 +65,10 @@ esac
 
 value=$1; shift
 target=focused
+strength=""
 while (($#)); do
   case $1 in
+    --strength) strength="${2:?--strength needs a number from 0.05 to 1}"; shift 2 ;;
     --title) target="title:${2:?--title needs text}"; shift 2 ;;
     --pid) target="pid:${2:?--pid needs a number}"; shift 2 ;;
     --address) target="address:${2:?--address needs a window address}"; shift 2 ;;
@@ -64,4 +77,5 @@ while (($#)); do
   esac
 done
 
-call apply "$(jq -cn --arg value "$value" --arg target "$target" '{value: $value, target: $target}')"
+call apply "$(jq -cn --arg value "$value" --arg target "$target" --arg strength "$strength" \
+  '{value: $value, target: $target} + (if $strength == "" then {} else {strength: ($strength | tonumber)} end)')"

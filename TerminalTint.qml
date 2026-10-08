@@ -8,9 +8,11 @@ import qs.Ui
 import "Palette.js" as Palette
 
 // Terminal Tint: give any running terminal window its own look: a background
-// tint, an Aether mood generated from a wallpaper, or a whole Omarchy theme.
-// Looks are escape sequences written to the window's pty (OSC 4/10/11/12), so
-// the program inside keeps running untouched; the window border can follow.
+// tint, an Aether mood generated from a wallpaper, or a whole Omarchy theme,
+// plus, in Ghostty, its own wallpaper. Looks are escape sequences written to
+// the window's pty (OSC 4/10/11/12), so the program inside keeps running
+// untouched. Wallpapers are a per-window Ghostty config file that the window
+// reloads on SIGUSR2. The window border can follow the look.
 Item {
   id: root
 
@@ -22,14 +24,21 @@ Item {
   property var terminals: []
   property int current: 0
   property string previewPty: ""
-  property bool borders: true
+  property string previewWallpaperPty: ""
   property bool focusOnScan: false
   property bool rescan: false
   property var requests: []
-  property var known: ({})   // pty -> {pid, look} for looks set this session
+  property var known: ({})   // pty -> {pid, look, wallpaper} set this session
 
-  // Catalog of moods and themes, refreshed whenever the picker opens.
-  property var catalog: ({ wallpaper: "", aether: false, modes: [], wallpapers: [], themes: [] })
+  // Settings kept in ~/.config/omarchy/terminal-tint.json.
+  property bool borders: true
+  property real strength: Palette.DEFAULT_STRENGTH
+  property bool withWallpaper: true
+  property bool welcomed: false
+  property bool configLoaded: false
+
+  // Catalog of moods, themes and wallpapers, refreshed whenever the picker opens.
+  property var catalog: ({ wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] })
   property bool catalogLoaded: false
   property string tab: "moods"
   property string moodSource: ""
@@ -37,11 +46,17 @@ Item {
   property var moodQueue: []
   property string moodRunning: ""
   property string hoverText: ""
+  property string setupMessage: ""
+  property var pendingWallpaper: null
+  property var reshowPtys: []
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/terminal-tint"
   readonly property string configFile:
     (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/terminal-tint.json"
+  readonly property string pluginDir:
+    decodeURIComponent(String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "")).replace(/\/$/, "")
+  property string omarchyPath: Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy"
 
   property string fontFamily: Style.font.menuFamily
   readonly property color surface: Color.menu.background
@@ -60,6 +75,8 @@ Item {
   readonly property int contentWidth: Math.max(columns * cardWidth + (columns - 1) * gap, Style.space(820))
 
   readonly property var selectedTerm: current >= 0 && current < terminals.length ? terminals[current] : null
+  readonly property bool selectedTakesWallpaper: selectedTerm !== null && selectedTerm.wallpaperReady
+  readonly property var tabs: catalog.aether ? ["moods", "themes", "wallpapers"] : ["themes", "wallpapers"]
   readonly property var moodSources: {
     var out = []
     if (catalog.wallpaper) out.push(catalog.wallpaper)
@@ -67,15 +84,36 @@ Item {
       if (out.indexOf(catalog.wallpapers[i]) < 0) out.push(catalog.wallpapers[i])
     return out
   }
+  // Wallpapers to pick from: the current one, Aether's library, then each theme's.
+  readonly property var wallpaperChoices: {
+    var out = root.moodSources.filter(Palette.isImagePath)
+    for (var i = 0; i < catalog.themes.length; i++) {
+      var img = catalog.themes[i].image
+      if (Palette.isImagePath(img) && out.indexOf(img) < 0) out.push(img)
+    }
+    return out
+  }
   readonly property string activeMoodSource: moodSource || catalog.wallpaper
   readonly property var moods: moodCache[moodKey(activeMoodSource)] || []
   readonly property bool moodsLoading: moodRunning !== "" || moodQueue.length > 0
+
+  // Why the selected terminal can't take a wallpaper, or "" when it can.
+  readonly property string wallpaperBlocker: {
+    if (!catalogLoaded) return ""
+    if (!catalog.ghostty) return "Wallpapers need Ghostty. Install it and make it your terminal with: omarchy install terminal ghostty"
+    if (!catalog.launcher) return "Wallpapers need Ghostty windows opened through Terminal Tint's launcher."
+    if (!selectedTerm) return ""
+    if (!selectedTerm.ghostty) return "This window is " + (selectedTerm.cls || "not Ghostty") + ". Wallpapers work in Ghostty windows; open one with Super+Return."
+    if (!selectedTerm.wallpaperReady) return "This Ghostty window opened before wallpapers were set up. New Ghostty windows can take one."
+    return ""
+  }
 
   // ---- Shell lifecycle --------------------------------------------------
   function open(payloadJson) {
     root.opened = true
     root.focusOnScan = true
     root.hoverText = ""
+    root.setupMessage = ""
     root.scan()
     root.loadCatalog()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
@@ -97,8 +135,9 @@ Item {
   }
 
   // ---- Scripting (omarchy-shell shell call <id> <method> <arg>) ---------
-  // apply '{"value": V, "target": T}', or a bare value for the focused terminal.
+  // apply '{"value": V, "target": T, "strength": S}', or a bare value for the focused terminal.
   //   V: red | #203040 | next | reset | mood:fire | mood:fire@/path/wall.jpg | theme:tokyo-night
+  //      | wallpaper:/path/wall.jpg | wallpaper:none
   //   T: focused | title:TEXT | pid:N | address:HEX | all
   function apply(arg) {
     var req
@@ -106,7 +145,8 @@ Item {
     if (!req || typeof req !== "object") return "error: bad request"
     var value = String(req.value || "")
     if (!root.validSpec(value)) return "error: unknown look " + value
-    root.requests = root.requests.concat([{ value: value, target: String(req.target || "focused") }])
+    root.requests = root.requests.concat([{ value: value, target: String(req.target || "focused"),
+                                            strength: Number(req.strength) || root.strength }])
     root.scan()
     return "ok"
   }
@@ -120,17 +160,21 @@ Item {
       borders: root.borders,
       terminals: root.terminals.map(function (t) {
         return { pty: t.pty, pid: t.pid, address: "0x" + t.address, workspace: t.workspace,
-                 title: t.title, kind: t.look ? t.look.kind : "", look: Palette.lookLabel(t.look) }
+                 title: t.title, kind: t.look ? t.look.kind : "", look: Palette.lookLabel(t.look),
+                 wallpaper: t.wallpaper ? t.wallpaper.path : "", wallpaperReady: t.wallpaperReady }
       })
     })
   }
 
-  // Moods and themes available to `apply`.
+  // Moods, themes and wallpapers available to `apply`.
   function looks(arg) {
     return JSON.stringify({
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
-      wallpaper: root.catalog.wallpaper
+      wallpapers: root.wallpaperChoices,
+      wallpaper: root.catalog.wallpaper,
+      ghostty: root.catalog.ghostty,
+      launcher: root.catalog.launcher
     })
   }
 
@@ -144,6 +188,7 @@ Item {
   function validSpec(v) {
     return v === "next" || v === "reset" || Palette.tintLook(v) !== null
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
+      || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
   }
 
   // A look for a spec, { wait: true } while its data loads, or { error }.
@@ -182,6 +227,15 @@ Item {
           root.commit(root.indexOf(hits[j].pty), Palette.tintLook(root.nextHue(hits[j].look)))
         continue
       }
+      if (req.value.indexOf("wallpaper:") === 0) {
+        var path = req.value.slice(10)
+        var wp = path === "none" ? null : { path: path, strength: req.strength }
+        for (var w = 0; w < hits.length; w++) {
+          if (hits[w].wallpaperReady) root.setWallpaper(root.indexOf(hits[w].pty), wp)
+          else console.warn("terminal-tint: " + hits[w].title + " can't take a wallpaper")
+        }
+        continue
+      }
       var r = root.resolveSpec(req.value)
       if (r.wait) { waiting.push(req); continue }
       if (r.error) { console.warn("terminal-tint:", r.error); continue }
@@ -201,11 +255,16 @@ Item {
   function parseScan(output) {
     var a = output.indexOf("\n@@PS@@\n")
     var b = output.indexOf("\n@@STATE@@\n")
-    if (a < 0 || b < 0) return null
-    var list = Palette.terminals(output.slice(0, a), output.slice(a + 8, b), output.slice(b + 11))
+    var c = output.indexOf("\n@@GHOSTTY@@\n")
+    if (a < 0 || b < 0 || c < 0) return null
+    var list = Palette.terminals(output.slice(0, a), output.slice(a + 8, b), output.slice(b + 11, c),
+                                 output.slice(c + 13), root.runtimeDir)
     for (var i = 0; i < list.length; i++) {
       var k = root.known[list[i].pty]
-      if (k && k.pid === list[i].pid) list[i].look = k.look
+      if (k && k.pid === list[i].pid) {
+        list[i].look = k.look
+        list[i].wallpaper = k.wallpaper
+      }
     }
     return list
   }
@@ -243,9 +302,10 @@ Item {
     root.catalog = c
     root.catalogLoaded = true
     if (root.moodSource && root.moodSources.indexOf(root.moodSource) < 0) root.moodSource = ""
-    if (!c.aether && root.tab === "moods") root.tab = "themes"
+    if (root.tabs.indexOf(root.tab) < 0) root.tab = root.tabs[0]
     if (root.opened && c.aether) root.ensureMoods(root.activeMoodSource)
     if (root.requests.length > 0) root.scan()
+    root.maybeWelcome()
   }
 
   function moodKey(source) {
@@ -309,21 +369,57 @@ Item {
     Hyprland.dispatch(Palette.borderCommand("inactive_border_color", term.address, color, "99"))
   }
 
+  function persist(term) {
+    if (term.look || term.wallpaper)
+      root.send("save " + term.pty + " " + JSON.stringify({ pid: term.pid, look: term.look, wallpaper: term.wallpaper }))
+    else root.send("forget " + term.pty)
+    var known = Object.assign({}, root.known)
+    known[term.pty] = { pid: term.pid, look: term.look, wallpaper: term.wallpaper }
+    root.known = known
+  }
+
+  function update(index, patch) {
+    var next = root.terminals.slice()
+    next[index] = Object.assign({}, root.terminals[index], patch)
+    root.terminals = next
+    return next[index]
+  }
+
   function commit(index, look) {
     if (index < 0 || index >= root.terminals.length) return
-    var term = root.terminals[index]
     look = Palette.normalizeLook(look)
-    if (root.previewPty === term.pty) root.previewPty = ""
+    if (root.previewPty === root.terminals[index].pty) root.previewPty = ""
+    var term = root.update(index, { look: look })
     root.show(term, look)
-    if (look) root.send("save " + term.pty + " " + JSON.stringify({ pid: term.pid, look: look }))
-    else root.send("forget " + term.pty)
+    root.persist(term)
+  }
 
-    var next = root.terminals.slice()
-    next[index] = Object.assign({}, term, { look: look })
-    root.terminals = next
-    var known = Object.assign({}, root.known)
-    known[term.pty] = { pid: term.pid, look: look }
-    root.known = known
+  // A mood or theme, with its wallpaper too when the window can take one.
+  function commitWithWallpaper(index, look) {
+    root.commit(index, look)
+    var term = root.terminals[index]
+    var image = look ? (look.kind === "mood" ? look.source : look.image) : ""
+    if (root.withWallpaper && term && term.wallpaperReady && Palette.isImagePath(image))
+      root.setWallpaper(index, { path: image, strength: root.strength })
+  }
+
+  // Ghostty reloads the window's config file on SIGUSR2. The writer checks the
+  // pid really is Ghostty before signalling it.
+  function sendWallpaper(term, wallpaper) {
+    var w = Palette.normalizeWallpaper(wallpaper)
+    root.send("ghostty " + term.pid + " " + (w ? w.strength + " " + w.path : "- -"))
+    // Re-send the look once the reload settles, in case it reset the colors.
+    if (root.reshowPtys.indexOf(term.pty) < 0) root.reshowPtys = root.reshowPtys.concat([term.pty])
+    reshowLater.restart()
+  }
+
+  function setWallpaper(index, wallpaper) {
+    if (index < 0 || index >= root.terminals.length || !root.terminals[index].wallpaperReady) return
+    var w = Palette.normalizeWallpaper(wallpaper)
+    if (root.previewWallpaperPty === root.terminals[index].pty) root.previewWallpaperPty = ""
+    var term = root.update(index, { wallpaper: w })
+    root.sendWallpaper(term, w)
+    root.persist(term)
   }
 
   function preview(index, look) {
@@ -335,24 +431,78 @@ Item {
     root.show(term, Palette.normalizeLook(look))
   }
 
+  // Wallpaper previews reload Ghostty, so they wait until the pointer rests.
+  function previewWallpaper(index, wallpaper) {
+    if (index < 0 || index >= root.terminals.length || !root.terminals[index].wallpaperReady) return
+    previewEnd.stop()
+    root.pendingWallpaper = { pty: root.terminals[index].pty, wallpaper: Palette.normalizeWallpaper(wallpaper) }
+    wallpaperPreview.restart()
+  }
+
+  function onWallpaperPreview() {
+    var p = root.pendingWallpaper
+    root.pendingWallpaper = null
+    if (!p) return
+    var i = root.indexOf(p.pty)
+    if (i < 0) return
+    if (root.previewWallpaperPty && root.previewWallpaperPty !== p.pty) root.endPreview()
+    root.previewWallpaperPty = p.pty
+    root.sendWallpaper(root.terminals[i], p.wallpaper)
+  }
+
   function endPreview() {
     previewEnd.stop()
-    if (!root.previewPty) return
-    var i = root.indexOf(root.previewPty)
-    root.previewPty = ""
-    if (i >= 0) root.show(root.terminals[i], root.terminals[i].look)
+    wallpaperPreview.stop()
+    root.pendingWallpaper = null
+    if (root.previewPty) {
+      var i = root.indexOf(root.previewPty)
+      root.previewPty = ""
+      if (i >= 0) root.show(root.terminals[i], root.terminals[i].look)
+    }
+    if (root.previewWallpaperPty) {
+      var j = root.indexOf(root.previewWallpaperPty)
+      root.previewWallpaperPty = ""
+      if (j >= 0) root.sendWallpaper(root.terminals[j], root.terminals[j].wallpaper)
+    }
+  }
+
+  function onReshow() {
+    var ptys = root.reshowPtys
+    root.reshowPtys = []
+    for (var i = 0; i < ptys.length; i++) {
+      var k = root.indexOf(ptys[i])
+      if (k < 0) continue
+      var t = root.terminals[k]
+      root.show(t, root.previewPty === t.pty ? null : t.look)
+    }
+  }
+
+  function setStrength(value) {
+    root.strength = value
+    root.saveConfig()
+    var term = root.selectedTerm
+    if (term && term.wallpaper) root.setWallpaper(root.current, { path: term.wallpaper.path, strength: value })
   }
 
   // Space and Shift+Space walk the list on the open tab for the selected terminal.
   function stepLook(delta) {
     var term = root.selectedTerm
     if (!term) return
+    if (root.tab === "wallpapers") {
+      if (!term.wallpaperReady || root.wallpaperChoices.length === 0) return
+      var choices = root.wallpaperChoices
+      var w = term.wallpaper ? choices.indexOf(term.wallpaper.path) : -1
+      var wn = w < 0 ? (delta > 0 ? 0 : choices.length - 1) : (w + delta + choices.length) % choices.length
+      root.setWallpaper(root.current, { path: choices[wn], strength: root.strength })
+      root.hoverText = Palette.basename(choices[wn])
+      return
+    }
     var list = root.tab === "moods" ? root.moods : root.catalog.themes
     if (list.length === 0) return
     var i = -1
     for (var k = 0; k < list.length; k++) if (Palette.sameLook(list[k], term.look)) i = k
     var next = i < 0 ? (delta > 0 ? 0 : list.length - 1) : (i + delta + list.length) % list.length
-    root.commit(root.current, list[next])
+    root.commitWithWallpaper(root.current, list[next])
     root.hoverText = root.describe(list[next])
   }
 
@@ -362,8 +512,21 @@ Item {
     return Palette.pretty(look.id)
   }
 
+  function nextTab(delta) {
+    var i = root.tabs.indexOf(root.tab)
+    root.tab = root.tabs[(i + delta + root.tabs.length) % root.tabs.length]
+  }
+
+  function runSetup() {
+    if (setupProc.running) return
+    root.setupMessage = "Setting up Ghostty…"
+    setupProc.command = ["bash", root.pluginDir + "/bin/terminal-tint-setup-ghostty"]
+    setupProc.running = true
+  }
+
   // Re-send every saved look: after a theme change tints are re-derived from
   // the new background, and a Hyprland reload drops per-window border props.
+  // Wallpapers live in each window's config file, so they survive reloads.
   function reapply() {
     reapplyScan.running = true
   }
@@ -381,10 +544,12 @@ Item {
     return null
   }
 
-  // ---- Config -----------------------------------------------------------
+  // ---- Config and first run ---------------------------------------------
   function saveConfig() {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
-      "sh", root.configFile, JSON.stringify({ borders: root.borders })]
+      "sh", root.configFile, JSON.stringify({
+        borders: root.borders, strength: root.strength, withWallpaper: root.withWallpaper, welcomed: root.welcomed
+      })]
     configWriter.running = true
   }
 
@@ -392,16 +557,42 @@ Item {
     try {
       var cfg = JSON.parse(text)
       if (cfg && typeof cfg.borders === "boolean") root.borders = cfg.borders
+      if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
+      if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
+      if (cfg && cfg.welcomed === true) root.welcomed = true
     } catch (e) { }
+    root.configLoaded = true
+    root.maybeWelcome()
+  }
+
+  // The first time the plugin loads, say what it does and what wallpapers need.
+  // Plugin installs never run plugin code, so this is the earliest moment.
+  function maybeWelcome() {
+    if (root.welcomed || !root.configLoaded || !root.catalogLoaded) return
+    root.welcomed = true
+    root.saveConfig()
+    var body = root.catalog.ghostty && root.catalog.launcher
+      ? "Give each terminal its own tint, mood, theme or wallpaper. Click to open the picker."
+      : root.catalog.ghostty
+        ? "Give each terminal its own tint, mood or theme. Wallpapers need Ghostty windows opened through Terminal Tint: set that up in the picker's Wallpapers tab. Click to open the picker."
+        : "Give each terminal its own tint, mood or theme. Wallpapers require Ghostty: run 'omarchy install terminal ghostty', then set it up in the picker's Wallpapers tab. Click to open the picker."
+    Quickshell.execDetached([root.omarchyPath + "/bin/omarchy-notification-send", "--app-name", "Terminal Tint",
+      "-g", "\uDB80\uDFD8", "Terminal Tint is installed", body,
+      "--exec", "omarchy-shell", "shell", "toggle", root.pluginId, "{}"])
   }
 
   // ---- Processes --------------------------------------------------------
   readonly property string scanScript:
     'hyprctl -j clients; printf "\\n@@PS@@\\n"; ps -e -o pid=,ppid=,tty=; printf "\\n@@STATE@@\\n"; '
-    + 'for f in "$1"/pts-*; do [ -f "$f" ] && printf "%s %s\\n" "${f##*/}" "$(cat "$f")"; done; true'
+    + 'for f in "$1"/pts-*; do [ -f "$f" ] && printf "%s %s\\n" "${f##*/}" "$(cat "$f")"; done; '
+    + 'printf "\\n@@GHOSTTY@@\\n"; '
+    + 'for p in $(pgrep -x ghostty); do printf "%s\\t%s\\n" "$p" "$(tr "\\0" " " < /proc/$p/cmdline 2>/dev/null)"; done; true'
 
   readonly property string catalogScript:
     'printf "@@WALLPAPER %s\\n" "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n'
+    + 'command -v ghostty >/dev/null 2>&1 && printf "@@GHOSTTY\\n"\n'
+    + 'desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"\n'
+    + '[ -x "$HOME/.local/bin/terminal-tint-ghostty" ] && grep -qx "# Written by Terminal Tint" "$desktop" 2>/dev/null && printf "@@LAUNCHER\\n"\n'
     + 'if command -v aether >/dev/null 2>&1; then\n'
     + '  printf "@@MODES\\n"; aether --list-modes 2>/dev/null\n'
     + '  printf "@@WALLPAPERS\\n"; aether --list-wallpapers --json 2>/dev/null\n'
@@ -423,18 +614,36 @@ Item {
     + 'for m in "$@"; do printf "@@MODE %s\\n" "$m"; cat "$tmp/$m" 2>/dev/null; printf "\\n"; done\n'
 
   // One long-lived writer keeps escape sequences in order while the pointer
-  // sweeps across swatches. Lines: "write PTY SEQUENCE", "save PTY JSON",
-  // "forget PTY". Sequences are built only from validated hex colors.
+  // sweeps across swatches. Lines:
+  //   write PTY SEQUENCE     escape sequence for the terminal (validated hex colors only)
+  //   save PTY JSON          remember the look for the picker
+  //   forget PTY
+  //   ghostty PID STRENGTH PATH | ghostty PID - -   per-window wallpaper, then SIGUSR2
   readonly property string writerScript:
-    'mkdir -p "$1"; d=$1\n'
+    'mkdir -p "$1/ghostty"; d=$1\n'
     + 'while IFS= read -r line; do\n'
-    + '  op=${line%% *}; rest=${line#* }; pty=${rest%% *}; arg=${rest#* }\n'
-    + '  case $pty in pts/[0-9]*) ;; *) continue ;; esac\n'
-    + '  dev=/dev/$pty; f=$d/pts-${pty#pts/}\n'
+    + '  op=${line%% *}; rest=${line#* }; key=${rest%% *}; arg=${rest#* }\n'
     + '  case $op in\n'
-    + '    write) printf "%s" "$arg" > "$dev" ;;\n'
-    + '    save) printf "%s\\n" "$arg" > "$f" ;;\n'
-    + '    forget) rm -f "$f" ;;\n'
+    + '    write|save|forget)\n'
+    + '      case $key in pts/[0-9]*) ;; *) continue ;; esac\n'
+    + '      dev=/dev/$key; f=$d/pts-${key#pts/}\n'
+    + '      case $op in\n'
+    + '        write) printf "%s" "$arg" > "$dev" ;;\n'
+    + '        save) printf "%s\\n" "$arg" > "$f" ;;\n'
+    + '        forget) rm -f "$f" ;;\n'
+    + '      esac ;;\n'
+    + '    ghostty)\n'
+    + '      case $key in ""|*[!0-9]*) continue ;; esac\n'
+    + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
+    + '      strength=${arg%% *}; path=${arg#* }\n'
+    + '      {\n'
+    + '        echo "app-notifications = no-config-reload"\n'
+    + '        if [ "$strength" != "-" ]; then\n'
+    + '          printf "background-image = \\"%s\\"\\n" "$path"\n'
+    + '          echo "background-image-fit = cover"\n'
+    + '          printf "background-image-opacity = %s\\n" "$strength"\n'
+    + '        fi\n'
+    + '      } > "$d/ghostty/$key.conf" && kill -USR2 "$key" ;;\n'
     + '  esac\n'
     + 'done 2>/dev/null\n'
 
@@ -471,12 +680,22 @@ Item {
     stdout: StdioCollector { onStreamFinished: root.onMoods(text) }
   }
 
+  Process {
+    id: setupProc
+    stdout: StdioCollector { id: setupOut }
+    stderr: StdioCollector { id: setupErr }
+    onExited: function (code) {
+      root.setupMessage = code === 0 ? "" : (String(setupErr.text).trim() || "Setup failed.")
+      root.loadCatalog()
+    }
+  }
+
   Process { id: configWriter }
 
   Process {
     id: configReader
     running: true
-    command: ["cat", root.configFile]
+    command: ["sh", "-c", 'cat "$1" 2>/dev/null; true', "sh", root.configFile]
     stdout: StdioCollector { onStreamFinished: root.onConfig(text) }
   }
 
@@ -484,6 +703,8 @@ Item {
 
   // Sliding between neighbouring swatches should not flash the saved look.
   Timer { id: previewEnd; interval: 80; onTriggered: root.endPreview() }
+  Timer { id: wallpaperPreview; interval: 250; onTriggered: root.onWallpaperPreview() }
+  Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
 
   Connections {
     target: Color
@@ -558,9 +779,7 @@ Item {
   component TabButton: Text {
     id: tabButton
     property string name: ""
-    property bool enabledTab: true
     color: root.tab === name ? root.text : tabArea.containsMouse ? root.text : root.muted
-    opacity: enabledTab ? 1 : 0.4
     font.family: root.fontFamily
     font.pixelSize: Style.font.body
     font.bold: root.tab === name
@@ -581,7 +800,37 @@ Item {
       anchors.margins: -Style.space(4)
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: if (tabButton.enabledTab) root.tab = tabButton.name
+      onClicked: root.tab = tabButton.name
+    }
+  }
+
+  component TextButton: Rectangle {
+    id: textButton
+    property string label: ""
+    property bool chosen: false
+    signal activated()
+    width: buttonText.implicitWidth + Style.space(16)
+    height: buttonText.implicitHeight + Style.space(8)
+    radius: Style.cornerRadius
+    color: chosen ? Color.menu.selectedBackground : "transparent"
+    border.width: Math.max(1, Style.space(1))
+    border.color: chosen ? root.accent : buttonArea.containsMouse ? root.text : root.subtle
+
+    Text {
+      id: buttonText
+      anchors.centerIn: parent
+      text: textButton.label
+      color: textButton.chosen || buttonArea.containsMouse ? root.text : root.muted
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    MouseArea {
+      id: buttonArea
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: textButton.activated()
     }
   }
 
@@ -627,9 +876,8 @@ Item {
           var k = event.key
           var shift = (event.modifiers & Qt.ShiftModifier) !== 0
           if (k === Qt.Key_Escape || k === Qt.Key_Return || k === Qt.Key_Enter) root.dismiss()
-          else if (k === Qt.Key_Tab || k === Qt.Key_Backtab) {
-            if (root.catalog.aether) root.tab = root.tab === "moods" ? "themes" : "moods"
-          }
+          else if (k === Qt.Key_Tab) root.nextTab(1)
+          else if (k === Qt.Key_Backtab) root.nextTab(-1)
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
           else if (k === Qt.Key_B) root.setBorders(!root.borders)
           else if (n === 0) return
@@ -638,7 +886,10 @@ Item {
           else if (k === Qt.Key_Down || k === Qt.Key_J) root.current = Math.min(n - 1, root.current + root.columns)
           else if (k === Qt.Key_Up || k === Qt.Key_K) root.current = Math.max(0, root.current - root.columns)
           else if (k >= Qt.Key_1 && k <= Qt.Key_8) root.commit(root.current, Palette.tintLook(Palette.HUES[k - Qt.Key_1].id))
-          else if (k === Qt.Key_0 || k === Qt.Key_Backspace || k === Qt.Key_Delete) root.commit(root.current, null)
+          else if (k === Qt.Key_0 || k === Qt.Key_Backspace || k === Qt.Key_Delete) {
+            if (root.tab === "wallpapers") root.setWallpaper(root.current, null)
+            else root.commit(root.current, null)
+          }
           else if (k === Qt.Key_Space) root.stepLook(shift ? -1 : 1)
           else if (k === Qt.Key_N) root.commit(root.current, Palette.tintLook(root.nextHue(root.selectedTerm.look)))
           else return
@@ -688,7 +939,7 @@ Item {
             width: parent.width
             wrapMode: Text.WordWrap
             text: scanner.running ? "Looking for terminals…"
-              : "No terminal windows found. Terminal Tint works with terminals that run one process per window (foot, Alacritty, Kitty)."
+              : "No terminal windows found. Terminal Tint works with terminals that run one process per window (Ghostty through Terminal Tint's launcher, foot, Alacritty, Kitty)."
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -806,7 +1057,12 @@ Item {
                         anchors.right: parent.right
                         anchors.baseline: titleLabel.baseline
                         width: Math.min(implicitWidth, parent.width * 0.5)
-                        text: tile.look && tile.look.kind !== "tint" ? Palette.lookLabel(tile.look) : ""
+                        text: {
+                          var parts = []
+                          if (tile.look && tile.look.kind !== "tint") parts.push(Palette.pretty(tile.look.id))
+                          if (tile.modelData.wallpaper) parts.push("\uDB80\uDEE9 " + Palette.basename(tile.modelData.wallpaper.path))
+                          return parts.join(" · ")
+                        }
                         elide: Text.ElideMiddle
                         color: root.muted
                         font.family: root.fontFamily
@@ -841,26 +1097,54 @@ Item {
 
           Rectangle { width: parent.width; height: Math.max(1, Style.space(1)); color: root.subtle }
 
-          // Moods and themes apply to the selected terminal.
+          // Moods, themes and wallpapers apply to the selected terminal.
           Item {
             width: parent.width
-            height: Math.max(moodsTab.implicitHeight, appliesText.implicitHeight) + Style.space(5)
+            height: Math.max(tabRow.implicitHeight, appliesText.implicitHeight) + Style.space(5)
 
             Row {
+              id: tabRow
               spacing: Style.space(18)
-              TabButton { id: moodsTab; name: "moods"; text: "Moods"; enabledTab: root.catalog.aether }
-              TabButton { name: "themes"; text: "Themes" }
+              Repeater {
+                model: root.tabs
+                delegate: TabButton {
+                  required property var modelData
+                  name: modelData
+                  text: Palette.pretty(modelData)
+                }
+              }
             }
 
-            Text {
-              id: appliesText
+            Row {
               anchors.right: parent.right
-              width: Math.min(implicitWidth, parent.width * 0.6)
-              text: root.selectedTerm ? "for " + root.selectedTerm.title : ""
-              elide: Text.ElideRight
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              spacing: Style.space(14)
+
+              Text {
+                visible: root.tab !== "wallpapers" && root.selectedTakesWallpaper
+                text: (root.withWallpaper ? "\uDB80\uDD32" : "\uDB80\uDD31") + " with its wallpaper"
+                color: withArea.containsMouse ? root.text : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+
+                MouseArea {
+                  id: withArea
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: { root.withWallpaper = !root.withWallpaper; root.saveConfig() }
+                }
+              }
+
+              Text {
+                id: appliesText
+                width: Math.min(implicitWidth, root.contentWidth * 0.45)
+                text: root.selectedTerm ? "for " + root.selectedTerm.title : ""
+                elide: Text.ElideRight
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
             }
           }
 
@@ -869,17 +1153,8 @@ Item {
             width: parent.width
             spacing: Style.space(10)
 
-            Text {
-              visible: !root.catalog.aether && root.catalogLoaded
-              text: "Moods come from Aether, which isn't installed."
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
             // Wallpapers to draw moods from; the current one comes first.
             Flickable {
-              visible: root.catalog.aether
               width: parent.width
               height: Style.space(54)
               contentWidth: sourceRow.implicitWidth
@@ -892,12 +1167,11 @@ Item {
                 spacing: Style.space(8)
 
                 Repeater {
-                  model: root.opened ? root.moodSources : []
+                  model: root.opened && root.tab === "moods" ? root.moodSources : []
 
                   delegate: Rectangle {
                     id: sourceTile
                     required property var modelData
-                    required property int index
                     readonly property bool chosen: modelData === root.activeMoodSource
                     width: Style.space(96)
                     height: Style.space(54)
@@ -952,7 +1226,7 @@ Item {
             }
 
             Text {
-              visible: root.catalog.aether && root.moods.length === 0
+              visible: root.moods.length === 0
               text: root.moodsLoading ? "Mixing moods from " + Palette.basename(root.activeMoodSource) + "…"
                 : "No moods for this wallpaper."
               color: root.muted
@@ -986,7 +1260,7 @@ Item {
                     fontFamily: root.fontFamily
                     onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
                     onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
-                    onPicked: root.commit(root.current, modelData)
+                    onPicked: root.commitWithWallpaper(root.current, modelData)
                   }
                 }
               }
@@ -1020,7 +1294,138 @@ Item {
                   fontFamily: root.fontFamily
                   onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
                   onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
-                  onPicked: root.commit(root.current, modelData)
+                  onPicked: root.commitWithWallpaper(root.current, modelData)
+                }
+              }
+            }
+          }
+
+          // Wallpapers: Ghostty only, one config file per window.
+          Column {
+            visible: root.tab === "wallpapers"
+            width: parent.width
+            spacing: Style.space(10)
+
+            Column {
+              visible: root.wallpaperBlocker !== ""
+              width: parent.width
+              spacing: Style.space(8)
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.wallpaperBlocker
+                color: root.text
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              TextButton {
+                visible: root.catalog.ghostty && !root.catalog.launcher
+                label: setupProc.running ? "Setting up…" : "Set up Ghostty for wallpapers"
+                onActivated: root.runSetup()
+              }
+
+              Text {
+                visible: root.setupMessage !== ""
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.setupMessage
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            Row {
+              spacing: Style.space(8)
+              opacity: root.selectedTakesWallpaper ? 1 : 0.4
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Strength"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Repeater {
+                model: Palette.STRENGTHS
+                delegate: TextButton {
+                  required property var modelData
+                  label: Math.round(modelData * 100) + "%"
+                  chosen: root.strength === modelData
+                  onActivated: root.setStrength(modelData)
+                }
+              }
+            }
+
+            Flickable {
+              width: parent.width
+              height: Math.min(wallFlow.implicitHeight, Style.space(250))
+              contentWidth: width
+              contentHeight: wallFlow.implicitHeight
+              clip: true
+              interactive: contentHeight > height
+              boundsBehavior: Flickable.StopAtBounds
+              opacity: root.selectedTakesWallpaper ? 1 : 0.4
+
+              Flow {
+                id: wallFlow
+                width: parent.width
+                spacing: Style.space(8)
+
+                Repeater {
+                  model: root.opened && root.tab === "wallpapers" ? [""].concat(root.wallpaperChoices) : []
+
+                  delegate: Rectangle {
+                    id: wallTile
+                    required property var modelData
+                    readonly property bool chosen: root.selectedTerm !== null
+                      && (root.selectedTerm.wallpaper ? root.selectedTerm.wallpaper.path === modelData : modelData === "")
+                    width: Style.space(128)
+                    height: Style.space(72)
+                    radius: Style.cornerRadius
+                    color: root.themeBackground
+                    border.width: Math.max(1, Style.space(chosen ? 2 : 1))
+                    border.color: chosen ? root.accent : wallArea.containsMouse ? root.text : root.subtle
+                    clip: true
+
+                    Image {
+                      visible: wallTile.modelData !== ""
+                      anchors.fill: parent
+                      anchors.margins: parent.border.width
+                      source: wallTile.modelData ? Palette.fileUrl(wallTile.modelData) : ""
+                      sourceSize.width: Style.space(256)
+                      fillMode: Image.PreserveAspectCrop
+                      asynchronous: true
+                      cache: true
+                    }
+
+                    Text {
+                      visible: wallTile.modelData === ""
+                      anchors.centerIn: parent
+                      text: "None"
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+
+                    MouseArea {
+                      id: wallArea
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: root.selectedTakesWallpaper ? Qt.PointingHandCursor : Qt.ArrowCursor
+                      onEntered: {
+                        root.hoverText = wallTile.modelData ? Palette.basename(wallTile.modelData) : "No wallpaper"
+                        if (root.selectedTakesWallpaper)
+                          root.previewWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                      }
+                      onExited: { root.hoverText = ""; previewEnd.restart() }
+                      onClicked: if (root.selectedTakesWallpaper)
+                        root.setWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                    }
+                  }
                 }
               }
             }
@@ -1030,7 +1435,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next look · Tab moods/themes · W wallpaper · B borders · Esc"
+              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab moods/themes/wallpapers · W mood wallpaper · B borders · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
