@@ -173,6 +173,12 @@ function lookBackground(look, themeBackground) {
   return look.palette.background;
 }
 
+// Unfocused windows get a much darker version of their color, so the focused
+// one still stands out the way Omarchy's own borders do.
+function inactiveAccent(accent, themeBackground) {
+  return accent ? mix(themeBackground, accent, 0.4) : "";
+}
+
 function lookAccent(look) {
   if (!look) return "";
   if (look.kind === "tint") return isHex(look.id) ? look.id : hue(look.id).hex;
@@ -270,6 +276,13 @@ function borderCommand(prop, address, color, alpha) {
   var v = color ? JSON.stringify("rgba(" + color.replace(/^#/, "") + alpha + ")") : "-1";
   return "hl.dsp.window.set_prop({ prop = " + JSON.stringify(prop)
     + ", value = " + v + ", window = " + JSON.stringify("address:0x" + address) + " })";
+}
+
+// Both border colors in one Hyprland call, so they can't be applied out of
+// order with another update to the same window.
+function borderPair(address, active, activeAlpha, inactive, inactiveAlpha) {
+  return "function() hl.dispatch(" + borderCommand("active_border_color", address, active, activeAlpha)
+    + ") hl.dispatch(" + borderCommand("inactive_border_color", address, inactive, inactiveAlpha) + ") end";
 }
 
 // ---- Parsing shell output ---------------------------------------------------

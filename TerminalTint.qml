@@ -409,8 +409,8 @@ Item {
   function paintBorder(term, look) {
     if (!term.address) return
     var color = root.borders ? Palette.lookAccent(look) : ""
-    Hyprland.dispatch(Palette.borderCommand("active_border_color", term.address, color, "ff"))
-    Hyprland.dispatch(Palette.borderCommand("inactive_border_color", term.address, color, "99"))
+    Hyprland.dispatch(Palette.borderPair(term.address, color, "ff",
+      Palette.inactiveAccent(color, root.themeBackground), "ff"))
   }
 
   function persist(term) {
@@ -578,6 +578,10 @@ Item {
   // Re-send every saved look: after a theme change tints are re-derived from
   // the new background, and a Hyprland reload drops per-window border props.
   // Wallpapers live in each window's config file, so they survive reloads.
+  // At startup every terminal's border is repainted, which also clears a pulse
+  // color left behind if the shell stopped mid-pulse.
+  property bool repaintAll: false
+
   function reapply() {
     reapplyScan.running = true
   }
@@ -585,7 +589,11 @@ Item {
   function onReapplyScan(output) {
     var list = root.parseScan(output)
     if (!list) return
-    for (var i = 0; i < list.length; i++) if (list[i].look) root.show(list[i], list[i].look)
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].look) root.show(list[i], list[i].look)
+      else if (root.repaintAll) root.paintBorder(list[i], null)
+    }
+    root.repaintAll = false
     if (root.opened) root.terminals = list
   }
 
@@ -613,12 +621,24 @@ Item {
     root.pulses = pulses
   }
 
-  // Stop pulsing and give the window its usual border back.
+  // Stop pulsing and give the window its usual border back, then once more a
+  // moment later in case a last pulse frame lands after the first restore.
+  property var restoreQueue: []
+
   function stopPulse(address) {
     var p = root.pulses[address]
     if (!p) return
     root.dropPulse(address)
     root.paintBorder({ address: address }, p.look)
+    root.restoreQueue = root.restoreQueue.concat([{ address: address, look: p.look }])
+    restoreAgain.restart()
+  }
+
+  function onRestoreAgain() {
+    var queue = root.restoreQueue
+    root.restoreQueue = []
+    for (var i = 0; i < queue.length; i++)
+      if (!root.pulses[queue[i].address]) root.paintBorder({ address: queue[i].address }, queue[i].look)
   }
 
   function dropPulse(address) {
@@ -633,8 +653,7 @@ Item {
     for (var addr in root.pulses) {
       var p = root.pulses[addr]
       var c = Palette.pulseColor(p.color, root.themeBackground, now - p.started)
-      Hyprland.dispatch(Palette.borderCommand("active_border_color", addr, c, "ff"))
-      Hyprland.dispatch(Palette.borderCommand("inactive_border_color", addr, c, "ff"))
+      Hyprland.dispatch(Palette.borderPair(addr, c, "ff", c, "ff"))
     }
   }
 
@@ -672,6 +691,10 @@ Item {
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
     } catch (e) { }
+    if (!root.configLoaded) {
+      root.repaintAll = true
+      root.reapply()
+    }
     root.configLoaded = true
     root.maybeWelcome()
   }
@@ -831,6 +854,7 @@ Item {
   Timer { id: wallpaperPreview; interval: 250; onTriggered: root.onWallpaperPreview() }
   Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
   Timer { interval: 70; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
+  Timer { id: restoreAgain; interval: 250; onTriggered: root.onRestoreAgain() }
 
   Connections {
     target: Color
@@ -859,6 +883,11 @@ Item {
   }
 
   Component.onCompleted: root.loadCatalog()
+
+  // Shutting down mid-pulse would leave a pulse color on the border.
+  Component.onDestruction: {
+    for (var addr in root.pulses) root.paintBorder({ address: addr }, root.pulses[addr].look)
+  }
 
   // ---- UI ---------------------------------------------------------------
   component Swatch: Item {
@@ -998,52 +1027,69 @@ Item {
       readonly property color scrim: Color.menu.scrim
       readonly property color ring: (term && Palette.lookAccent(term.look)) || root.accent
 
-      // The cut-out shrinks to the middle of the screen when the selection is elsewhere.
-      property real hx: here ? term.lx - gap : width / 2
-      property real hy: here ? term.ly - gap : height / 2
-      property real hw: here ? term.w + gap * 2 : 0
-      property real hh: here ? term.h + gap * 2 : 0
-      Behavior on hx { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-      Behavior on hy { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-      Behavior on hw { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-      Behavior on hh { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+      // The cut-out, in whole pixels; it closes to the middle of the screen when
+      // the selection is elsewhere.
+      readonly property rect target: here
+        ? Qt.rect(Math.round(term.lx - gap), Math.round(term.ly - gap), Math.round(term.w + gap * 2), Math.round(term.h + gap * 2))
+        : Qt.rect(Math.round(width / 2), Math.round(height / 2), 0, 0)
 
-      Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, spot.hy); color: spot.scrim }
-      Rectangle { x: 0; y: spot.hy + spot.hh; width: parent.width; height: Math.max(0, parent.height - spot.hy - spot.hh); color: spot.scrim }
-      Rectangle { x: 0; y: spot.hy; width: Math.max(0, spot.hx); height: spot.hh; color: spot.scrim }
-      Rectangle { x: spot.hx + spot.hw; y: spot.hy; width: Math.max(0, parent.width - spot.hx - spot.hw); height: spot.hh; color: spot.scrim }
+      // One rectangle whose very thick border is the dimmed area and whose empty
+      // middle is the cut-out, so it moves as a single piece with the ring.
+      Item {
+        id: hole
+        x: spot.target.x
+        y: spot.target.y
+        width: spot.target.width
+        height: spot.target.height
+        Behavior on x { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-      Rectangle {
-        x: spot.hx
-        y: spot.hy
-        width: spot.hw
-        height: spot.hh
-        color: "transparent"
-        radius: Style.cornerRadius
-        border.width: Math.max(2, Style.space(3))
-        border.color: spot.ring
-        opacity: spot.here ? 1 : 0
-        Behavior on opacity { NumberAnimation { duration: 140 } }
+        readonly property real reach: Math.max(spot.width, spot.height) * 2
 
         Rectangle {
-          x: Style.space(10)
-          y: Style.space(10)
-          width: Math.min(nameText.implicitWidth + Style.space(16), parent.width - Style.space(20))
-          height: nameText.implicitHeight + Style.space(8)
-          radius: height / 2
-          color: spot.ring
+          x: -hole.reach
+          y: -hole.reach
+          width: hole.width + hole.reach * 2
+          height: hole.height + hole.reach * 2
+          color: "transparent"
+          border.width: hole.reach
+          border.color: spot.scrim
+        }
 
-          Text {
-            id: nameText
-            anchors.centerIn: parent
-            width: parent.width - Style.space(16)
-            horizontalAlignment: Text.AlignHCenter
-            text: spot.term ? spot.term.title : ""
-            elide: Text.ElideRight
-            color: Palette.isLight(String(spot.ring)) ? "#000000" : "#ffffff"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
+        Rectangle {
+          anchors.fill: parent
+          color: "transparent"
+          radius: Style.cornerRadius
+          border.width: Math.max(2, Style.space(3))
+          border.color: spot.ring
+          opacity: spot.here ? 1 : 0
+          Behavior on opacity { NumberAnimation { duration: 160 } }
+          Behavior on border.color { ColorAnimation { duration: 220 } }
+
+          Rectangle {
+            x: Style.space(10)
+            y: Style.space(10)
+            width: Math.min(nameText.implicitWidth + Style.space(16), parent.width - Style.space(20))
+            height: nameText.implicitHeight + Style.space(8)
+            radius: height / 2
+            color: spot.ring
+            visible: parent.width > Style.space(60)
+            Behavior on color { ColorAnimation { duration: 220 } }
+
+            Text {
+              id: nameText
+              anchors.centerIn: parent
+              width: parent.width - Style.space(16)
+              horizontalAlignment: Text.AlignHCenter
+              text: spot.term ? spot.term.title : ""
+              elide: Text.ElideRight
+              color: Palette.isLight(String(spot.ring)) ? "#000000" : "#ffffff"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
           }
         }
       }
