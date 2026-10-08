@@ -76,7 +76,8 @@ Item {
 
   readonly property var selectedTerm: current >= 0 && current < terminals.length ? terminals[current] : null
   readonly property bool selectedTakesWallpaper: selectedTerm !== null && selectedTerm.wallpaperReady
-  readonly property var tabs: catalog.aether ? ["moods", "themes", "wallpapers"] : ["themes", "wallpapers"]
+  readonly property var tabs: ["moods", "themes", "wallpapers"]
+  property bool tabChosen: false
   readonly property var moodSources: {
     var out = []
     if (catalog.wallpaper) out.push(catalog.wallpaper)
@@ -96,6 +97,13 @@ Item {
   readonly property string activeMoodSource: moodSource || catalog.wallpaper
   readonly property var moods: moodCache[moodKey(activeMoodSource)] || []
   readonly property bool moodsLoading: moodRunning !== "" || moodQueue.length > 0
+
+  // Why moods are unavailable, or "" when Aether is ready.
+  readonly property string aetherBlocker: {
+    if (!catalogLoaded || catalog.aether) return ""
+    if (!catalog.aetherInstalled) return "Moods come from Aether, Omarchy's theme maker, which isn't installed. Get it with: omarchy pkg add aether"
+    return "Moods need Aether 4 or newer (found " + (catalog.aetherVersion || "an unknown version") + "). Update with: omarchy update"
+  }
 
   // Why the selected terminal can't take a wallpaper, or "" when it can.
   readonly property string wallpaperBlocker: {
@@ -166,13 +174,18 @@ Item {
     })
   }
 
-  // Moods, themes and wallpapers available to `apply`.
+  // Moods, themes and wallpapers available to `apply`, and what's installed.
+  // Also refreshes the catalog for the next call.
   function looks(arg) {
+    root.loadCatalog()
     return JSON.stringify({
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
       wallpapers: root.wallpaperChoices,
       wallpaper: root.catalog.wallpaper,
+      aether: root.catalog.aether,
+      aetherInstalled: root.catalog.aetherInstalled,
+      aetherVersion: root.catalog.aetherVersion,
       ghostty: root.catalog.ghostty,
       launcher: root.catalog.launcher
     })
@@ -302,7 +315,7 @@ Item {
     root.catalog = c
     root.catalogLoaded = true
     if (root.moodSource && root.moodSources.indexOf(root.moodSource) < 0) root.moodSource = ""
-    if (root.tabs.indexOf(root.tab) < 0) root.tab = root.tabs[0]
+    if (!root.tabChosen && !c.aether && root.tab === "moods") root.tab = "themes"
     if (root.opened && c.aether) root.ensureMoods(root.activeMoodSource)
     if (root.requests.length > 0) root.scan()
     root.maybeWelcome()
@@ -515,6 +528,7 @@ Item {
   function nextTab(delta) {
     var i = root.tabs.indexOf(root.tab)
     root.tab = root.tabs[(i + delta + root.tabs.length) % root.tabs.length]
+    root.tabChosen = true
   }
 
   function runSetup() {
@@ -571,11 +585,17 @@ Item {
     if (root.welcomed || !root.configLoaded || !root.catalogLoaded) return
     root.welcomed = true
     root.saveConfig()
-    var body = root.catalog.ghostty && root.catalog.launcher
-      ? "Give each terminal its own tint, mood, theme or wallpaper. Click to open the picker."
-      : root.catalog.ghostty
-        ? "Give each terminal its own tint, mood or theme. Wallpapers need Ghostty windows opened through Terminal Tint: set that up in the picker's Wallpapers tab. Click to open the picker."
-        : "Give each terminal its own tint, mood or theme. Wallpapers require Ghostty: run 'omarchy install terminal ghostty', then set it up in the picker's Wallpapers tab. Click to open the picker."
+    var notes = ["Give each terminal its own tint, mood, theme or wallpaper."]
+    if (!root.catalog.aether)
+      notes.push(root.catalog.aetherInstalled
+        ? "Moods need Aether 4 or newer: run 'omarchy update'."
+        : "Moods need Aether: run 'omarchy pkg add aether'.")
+    if (!root.catalog.ghostty)
+      notes.push("Wallpapers require Ghostty: run 'omarchy install terminal ghostty', then set it up in the picker's Wallpapers tab.")
+    else if (!root.catalog.launcher)
+      notes.push("Wallpapers require Ghostty windows opened through Terminal Tint: set that up in the picker's Wallpapers tab.")
+    notes.push("Click to open the picker.")
+    var body = notes.join(" ")
     Quickshell.execDetached([root.omarchyPath + "/bin/omarchy-notification-send", "--app-name", "Terminal Tint",
       "-g", "\uDB80\uDFD8", "Terminal Tint is installed", body,
       "--exec", "omarchy-shell", "shell", "toggle", root.pluginId, "{}"])
@@ -593,9 +613,16 @@ Item {
     + 'command -v ghostty >/dev/null 2>&1 && printf "@@GHOSTTY\\n"\n'
     + 'desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"\n'
     + '[ -x "$HOME/.local/bin/terminal-tint-ghostty" ] && grep -qx "# Written by Terminal Tint" "$desktop" 2>/dev/null && printf "@@LAUNCHER\\n"\n'
+    // Aether's CLI arrived in 4.x; never call it on an older build, which might
+    // open its window instead. Timeouts keep a stuck call from holding the picker.
     + 'if command -v aether >/dev/null 2>&1; then\n'
-    + '  printf "@@MODES\\n"; aether --list-modes 2>/dev/null\n'
-    + '  printf "@@WALLPAPERS\\n"; aether --list-wallpapers --json 2>/dev/null\n'
+    + '  v=$(timeout 3 aether --version </dev/null 2>/dev/null | head -n 1)\n'
+    + '  printf "@@AETHER %s\\n" "${v:-unknown}"\n'
+    + '  case $v in\n'
+    + '    "aether "[4-9].*|"aether "[1-9][0-9]*)\n'
+    + '      printf "@@MODES\\n"; timeout 5 aether --list-modes --json </dev/null 2>/dev/null; printf "\\n"\n'
+    + '      printf "@@WALLPAPERS\\n"; timeout 5 aether --list-wallpapers --json </dev/null 2>/dev/null; printf "\\n" ;;\n'
+    + '  esac\n'
     + 'fi\n'
     + 'for d in "${OMARCHY_PATH:-/usr/share/omarchy}"/themes/*/ "$HOME"/.config/omarchy/themes/*/; do\n'
     + '  [ -f "$d/colors.toml" ] || continue\n'
@@ -610,7 +637,7 @@ Item {
     'src=$1; light=$2; shift 2\n'
     + 'tmp=$(mktemp -d) || exit 1\n'
     + 'trap \'rm -rf "$tmp"\' EXIT\n'
-    + 'printf "%s\\n" "$@" | xargs -P 6 -I{} sh -c \'aether --extract-palette "$1" --extract-mode "$2" --json $3 > "$4/$2" 2>/dev/null\' sh "$src" {} "$light" "$tmp"\n'
+    + 'printf "%s\\n" "$@" | xargs -P 6 -I{} sh -c \'timeout 10 aether --extract-palette "$1" --extract-mode "$2" --json $3 > "$4/$2" 2>/dev/null </dev/null\' sh "$src" {} "$light" "$tmp"\n'
     + 'for m in "$@"; do printf "@@MODE %s\\n" "$m"; cat "$tmp/$m" 2>/dev/null; printf "\\n"; done\n'
 
   // One long-lived writer keeps escape sequences in order while the pointer
@@ -800,7 +827,7 @@ Item {
       anchors.margins: -Style.space(4)
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: root.tab = tabButton.name
+      onClicked: { root.tab = tabButton.name; root.tabChosen = true }
     }
   }
 
@@ -1153,8 +1180,19 @@ Item {
             width: parent.width
             spacing: Style.space(10)
 
+            Text {
+              visible: root.aetherBlocker !== ""
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: root.aetherBlocker
+              color: root.text
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
             // Wallpapers to draw moods from; the current one comes first.
             Flickable {
+              visible: root.catalog.aether
               width: parent.width
               height: Style.space(54)
               contentWidth: sourceRow.implicitWidth
@@ -1226,7 +1264,7 @@ Item {
             }
 
             Text {
-              visible: root.moods.length === 0
+              visible: root.catalog.aether && root.moods.length === 0
               text: root.moodsLoading ? "Mixing moods from " + Palette.basename(root.activeMoodSource) + "…"
                 : "No moods for this wallpaper."
               color: root.muted

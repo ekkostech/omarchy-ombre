@@ -394,13 +394,15 @@ function match(list, target) {
 
 // The catalog script prints sections:
 //   @@WALLPAPER <current wallpaper>
-//   @@MODES        then `aether --list-modes`        (only with Aether)
+//   @@AETHER <version>   Aether is installed (its `--version` line)
+//   @@MODES        then `aether --list-modes --json`  (only with Aether 4 or newer)
 //   @@WALLPAPERS   then `aether --list-wallpapers --json`
 //   @@GHOSTTY      Ghostty is installed
 //   @@LAUNCHER     Terminal Tint's Ghostty launcher is set up
 //   @@THEME <name>\t<background image>   then that theme's colors.toml
 function parseCatalog(text) {
-  var out = { wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] };
+  var out = { wallpaper: "", aether: false, aetherInstalled: false, aetherVersion: "",
+              ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] };
   var section = "", buf = [], theme = null, byName = {};
 
   function flush() {
@@ -425,7 +427,12 @@ function parseCatalog(text) {
     if (line.indexOf("@@") !== 0) { buf.push(line); continue; }
     flush();
     if (line.indexOf("@@WALLPAPER ") === 0) { out.wallpaper = line.slice(12).trim(); section = ""; }
-    else if (line === "@@MODES") { section = "modes"; out.aether = true; }
+    else if (line.indexOf("@@AETHER") === 0) {
+      out.aetherInstalled = true;
+      out.aetherVersion = line.slice(8).trim();
+      section = "";
+    }
+    else if (line === "@@MODES") section = "modes";
     else if (line === "@@GHOSTTY") { out.ghostty = true; section = ""; }
     else if (line === "@@LAUNCHER") { out.launcher = true; section = ""; }
     else if (line === "@@WALLPAPERS") section = "wallpapers";
@@ -437,22 +444,34 @@ function parseCatalog(text) {
   }
   flush();
 
+  // Moods work only when this Aether can list its modes.
+  out.aether = out.modes.length > 0;
   for (var id in byName) out.themes.push(byName[id]);
   out.themes.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
   return out;
 }
 
-// `aether --list-modes`: "  name   description" lines. The named moods (fire,
-// ocean, ...) describe themselves as "... mood: ..." and are listed first.
+// `aether --list-modes --json` ({"modes": [{name, description}]}), or the
+// plain "  name   description" lines older builds print. The named moods
+// (fire, ocean, ...) describe themselves as "... mood: ..." and come first.
 function parseModes(text) {
-  var moods = [], others = [];
-  var lines = String(text || "").split("\n");
-  for (var i = 0; i < lines.length; i++) {
-    var m = lines[i].match(/^\s+([a-z0-9-]+)\s+(.+)$/);
-    if (!m) continue;
-    var mode = { id: m[1], description: m[2].trim() };
-    (/\bmood:/i.test(mode.description) ? moods : others).push(mode);
+  var found = [];
+  var body = String(text || "").trim();
+  if (body.charAt(0) === "{") {
+    try {
+      var j = JSON.parse(body);
+      (j.modes || []).forEach(function (m) {
+        if (m && /^[a-z0-9-]+$/.test(m.name)) found.push({ id: m.name, description: String(m.description || "") });
+      });
+    } catch (e) { }
+  } else {
+    body.split("\n").forEach(function (line) {
+      var m = line.match(/^\s*([a-z0-9-]+)\s+(.+)$/);
+      if (m && m[1] !== "extraction") found.push({ id: m[1], description: m[2].trim() });
+    });
   }
+  var moods = [], others = [];
+  found.forEach(function (mode) { (/\bmood:/i.test(mode.description) ? moods : others).push(mode); });
   return moods.concat(others);
 }
 

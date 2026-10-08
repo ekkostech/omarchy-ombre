@@ -17,6 +17,7 @@
 #   terminal-tint borders on|off       follow the look with the window border
 #   terminal-tint --list               show terminals and their looks
 #   terminal-tint --looks              list the moods, themes and wallpapers
+#   terminal-tint --check              what's installed, and what moods and wallpapers still need
 #
 # Hues: red orange amber green teal blue purple pink
 # Targets (any command): --title TEXT, --pid N, --address HEX, --all
@@ -25,7 +26,7 @@ set -euo pipefail
 
 id="ekkostech.terminal-tint"
 
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -50,6 +51,19 @@ case ${1:-} in
   --looks)
     omarchy-shell shell call "$id" looks "" |
       jq -r '"moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" ")), "wallpapers:", (.wallpapers[] | "  " + .)'
+    exit ;;
+  --check)
+    call looks "" # the first call refreshes what's installed
+    sleep 0.5
+    omarchy-shell shell call "$id" looks "" | jq -r '
+      (if .aether then "✓ Aether \(.aetherVersion | sub("^aether "; "")): moods are available"
+       elif .aetherInstalled then "✗ \(.aetherVersion) is too old for moods. Update with: omarchy update"
+       else "✗ Aether is not installed, and moods need it. Install with: omarchy pkg add aether" end),
+      (if .ghostty then "✓ Ghostty is installed"
+       else "✗ Ghostty is not installed, and wallpapers need it. Install with: omarchy install terminal ghostty" end),
+      (if .launcher then "✓ Ghostty launcher is set up: new Ghostty windows can take wallpapers"
+       elif .ghostty then "✗ Ghostty launcher is not set up. Run: terminal-tint setup-ghostty"
+       else empty end)'
     exit ;;
   setup-ghostty)
     shift

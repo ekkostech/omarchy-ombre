@@ -29,6 +29,16 @@ mood or theme to try it on the real window, click to keep it.
 - **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
 - **Scriptable**: `terminal-tint red --title api` from a shell, a keybinding or an agent.
 
+## Requirements
+
+- **Omarchy 4**, whose Quickshell-based shell runs the plugin.
+- **Aether 4 or newer** for moods. Omarchy installs Aether by default; if it's gone, `omarchy pkg add aether`.
+- **Ghostty** for wallpapers: `omarchy install terminal ghostty`, then the one-time setup below.
+
+Tints and themes need nothing else. Terminal Tint checks for Aether and Ghostty
+itself: the first-run notification and the picker's Moods and Wallpapers tabs
+say what's missing and how to get it, and `terminal-tint --check` lists it all.
+
 ## Install
 
 ```bash
@@ -74,8 +84,8 @@ each terminal's card; moods, themes and wallpapers apply to the selected
 terminal. On a Ghostty window, **with its wallpaper** (next to the tabs) makes a
 mood or theme bring its wallpaper along.
 
-Moods need Aether (`aether --list-modes` should work). Without it, the Moods tab
-is disabled and tints and themes still work.
+Moods need Aether 4 or newer. Without it, the Moods tab says how to get it, and
+tints, themes and wallpapers still work.
 
 ## Scripting
 
@@ -98,6 +108,7 @@ terminal-tint theme:tokyo-night --pid 1234
 terminal-tint wallpaper ~/Wallpapers/forest.jpg --strength 0.15  # Ghostty
 terminal-tint wallpaper none
 terminal-tint --looks              # list moods, themes and wallpapers
+terminal-tint --check              # what's installed and what's missing
 terminal-tint borders off
 terminal-tint --list
 ```
