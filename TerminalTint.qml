@@ -42,6 +42,7 @@ Item {
   // Catalog of moods, themes and wallpapers, refreshed whenever the picker opens.
   property var catalog: ({ wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] })
   property bool catalogLoaded: false
+  property real catalogAt: 0
   property string tab: "moods"
   property string moodSource: ""
   property var moodCache: ({})
@@ -141,7 +142,10 @@ Item {
     root.hoverText = ""
     root.setupMessage = ""
     root.scan()
-    root.loadCatalog()
+    // The catalog is cheap but forks a process per theme, so refresh it at most
+    // once a minute; a theme change refreshes it right away.
+    if (!root.catalogLoaded || Date.now() - root.catalogAt > 60000) root.loadCatalog()
+    else if (root.catalog.aether) root.ensureMoods(root.activeMoodSource)
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   }
 
@@ -367,6 +371,7 @@ Item {
     var c = Palette.parseCatalog(output)
     root.catalog = c
     root.catalogLoaded = true
+    root.catalogAt = Date.now()
     if (root.moodSource && root.moodSources.indexOf(root.moodSource) < 0) root.moodSource = ""
     if (!root.tabChosen && !c.aether && root.tab === "moods") root.tab = "themes"
     if (root.opened && c.aether) root.ensureMoods(root.activeMoodSource)
@@ -853,8 +858,8 @@ Item {
     + 'fi\n'
     + 'for d in "${OMARCHY_PATH:-/usr/share/omarchy}"/themes/*/ "$HOME"/.config/omarchy/themes/*/; do\n'
     + '  [ -f "$d/colors.toml" ] || continue\n'
-    + '  n=${d%/}; n=${n##*/}\n'
-    + '  bg=$(ls -1 "$d"backgrounds/* 2>/dev/null | head -n 1)\n'
+    + '  n=${d%/}; n=${n##*/}; bg=\n'
+    + '  for f in "$d"backgrounds/*; do [ -f "$f" ] && { bg=$f; break; }; done\n'
     + '  printf "@@THEME %s\\t%s\\n" "$n" "$bg"; cat "$d/colors.toml"; printf "\\n"\n'
     + 'done\n'
     + 'true\n'
@@ -959,7 +964,7 @@ Item {
   Timer { id: previewEnd; interval: 80; onTriggered: root.endPreview() }
   Timer { id: wallpaperPreview; interval: 250; onTriggered: root.onWallpaperPreview() }
   Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
-  Timer { interval: 70; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
+  Timer { interval: 100; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
   Timer { id: restoreAgain; interval: 250; onTriggered: root.onRestoreAgain() }
   Timer {
     id: newWindowScan
@@ -973,7 +978,7 @@ Item {
 
   Connections {
     target: Color
-    function onBackgroundChanged() { reapplyLater.restart() }
+    function onBackgroundChanged() { reapplyLater.restart(); root.loadCatalog() }
   }
 
   Connections {
