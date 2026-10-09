@@ -74,7 +74,8 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 
 | Key | Action |
 |-----|--------|
-| Hover a swatch, mood or theme | Preview it on that terminal |
+| Click a card | Select that terminal (arrow keys do the same) |
+| Hover a swatch, mood or theme | Preview it on the terminal, without changing the selection |
 | Click it | Keep it |
 | `1`–`8` | Tint: red, orange, amber, green, teal, blue, purple, pink |
 | `0` / `Backspace` | Back to the terminal's own colors |
@@ -90,9 +91,10 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 | `P` | Pulse when an agent is done, on/off |
 | `Esc` / `Enter` | Close |
 
-The terminal you were in is selected when the picker opens. The tint dots sit on
-each terminal's card; moods, themes and wallpapers apply to the selected
-terminal. On a Ghostty window, **with its wallpaper** (next to the tabs) makes a
+The terminal you were in is selected when the picker opens. Everything works
+from the keyboard alone; the mouse is optional. The tint dots sit on each
+terminal's card and act on that card's terminal; moods, themes and wallpapers
+apply to the selected terminal. On a Ghostty window, **with its wallpaper** (next to the tabs) makes a
 mood or theme bring its wallpaper along.
 
 Moods need Aether 4 or newer. Without it, the Moods tab says how to get it, and

@@ -1225,9 +1225,9 @@ Item {
       anchors.margins: -Style.space(3)
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: { root.current = swatch.termIndex; root.preview(swatch.termIndex, Palette.tintLook(swatch.value)) }
+      onEntered: root.preview(swatch.termIndex, Palette.tintLook(swatch.value))
       onExited: previewEnd.restart()
-      onClicked: root.commit(swatch.termIndex, Palette.tintLook(swatch.value))
+      onClicked: { root.current = swatch.termIndex; root.commit(swatch.termIndex, Palette.tintLook(swatch.value)) }
     }
   }
 
@@ -1574,7 +1574,11 @@ Item {
                       cardsView.contentY = y + height - cardsView.height
                   }
 
-                  MouseArea { anchors.fill: parent; onClicked: root.current = tile.index }
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: { root.current = tile.index; keyCatcher.forceActiveFocus() }
+                  }
 
                   Column {
                     id: tileColumn
@@ -2193,7 +2197,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · F folder · B borders · P pulse · T text shadow · Esc"
+              || "Click a card to select · hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · F folder · B borders · P pulse · T text shadow · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
