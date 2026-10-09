@@ -18,6 +18,10 @@
 #   ombre pulse on|off         pulse a terminal's border when its agent finishes
 #   ombre shadow on|off        drop shadow under the text (Ghostty windows)
 #   ombre pulse now|stop       start or stop a pulse by hand (with a target)
+#   ombre project from                 use the focused terminal's look for its project folder
+#   ombre project set /path [LOOK] [--wallpaper FILE] [--strength 0.15]   define a rule
+#   ombre project list                 show project rules
+#   ombre project remove /path         drop a rule
 #   ombre default none|auto    what new terminals get: nothing, or a different tint each
 #   ombre default from         new terminals copy the focused (or targeted) terminal's look
 #   ombre default theme:nord   new terminals get this look (any look value)
@@ -32,7 +36,7 @@ set -euo pipefail
 
 id="ekkostech.ombre"
 
-usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -81,6 +85,19 @@ case ${1:-} in
   borders)
     case ${2:-} in on) call setBorders true ;; off) call setBorders false ;; *) usage 1 ;; esac
     exit ;;
+  project)
+    case ${2:-} in
+      from) set -- "project:from" "${@:3}" ;;
+      set)
+        path=$(readlink -f "${3:?project set needs a path}"); look=""; wp=""; st=""; shift 3
+        [[ ${1:-} && $1 != --* ]] && { look=$1; shift; }
+        while (($#)); do case $1 in --wallpaper) wp=$(readlink -f "$2"); shift 2 ;; --strength) st=$2; shift 2 ;; *) usage 1 ;; esac; done
+        call defineProject "$(jq -cn --arg p "$path" --arg l "$look" --arg w "$wp" --arg s "$st" '{path: $p} + (if $l == "" then {} else {look: $l} end) + (if $w == "" then {} else {wallpaper: $w} end) + (if $s == "" then {} else {strength: ($s|tonumber)} end)')"
+        exit ;;
+      list) omarchy-shell shell call "$id" looks "" | jq -r '.projects[] | "\(.path)\t\(.look)"'; exit ;;
+      remove) [[ -n ${3:-} ]] || usage 1; call apply "$(jq -cn --arg v "project:remove:$(readlink -f "$3")" '{value: $v}')"; exit ;;
+      *) usage 1 ;;
+    esac ;;
   default)
     case ${2:-} in
       none|auto) call setDefaultMode "$2"; exit ;;

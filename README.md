@@ -30,6 +30,7 @@ mood or theme to try it on the real window, click to keep it.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
 - **Matching borders**: the Hyprland border takes the look's accent color, bright on the focused window and dark on the others so you can still see focus move (press `B` to turn it off).
 - **Text shadow (Ghostty)**: a soft drop shadow under the text so it reads cleanly over any wallpaper. A tiny GPU shader that only runs when the terminal redraws. Press `T` to toggle.
+- **Project folders**: a terminal working inside a project's folder gets that project's look and wallpaper automatically, so Claude Code or Codex launched from `~/Projects/acme` comes up dressed for Acme. Style one terminal, press `F`, done. Your own wallpapers in `~/Wallpapers/Ombre/` show up in the Wallpapers tab.
 - **A default for new terminals**: new terminals can open with a saved look (and wallpaper), or each get a different tint automatically so new agents never look alike. Set it in the picker's New terminals tab.
 - **Pulses when an agent is done**: when an agent finishes and waits for you, its terminal's border breathes in its own color until you click into it. Works with agents that show a spinner in the window title (like Claude Code) and with any program that rings the terminal bell. Press `P` to turn it off.
 - **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
@@ -83,6 +84,7 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 | `W` / `Shift+W` | Next / previous wallpaper to make moods from |
 | Arrows / `hjkl` | Move between terminals |
 | `D` | Save the selected terminal's look as the default for new terminals |
+| `F` | Use the selected terminal's look for its project folder |
 | `T` | Text shadow on/off (Ghostty) |
 | `B` | Borders on/off |
 | `P` | Pulse when an agent is done, on/off |
@@ -124,6 +126,9 @@ ombre shadow on            # drop shadow under the text in Ghostty windows
 ombre default auto         # new terminals each get a different tint
 ombre default from         # new terminals copy the focused terminal's look
 ombre default none
+ombre project set ~/Projects/acme red --wallpaper ~/Wallpapers/Ombre/acme.png
+ombre project from                 # the focused terminal's look, for its git root
+ombre project list
 ombre --list
 ```
 

@@ -380,11 +380,47 @@ function monitorsById(monitorsText) {
   return out;
 }
 
-function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir, monitorsText) {
+function cwdsByPid(cwdText) {
+  var out = {};
+  var lines = String(cwdText || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split("\t");
+    if (parts.length >= 3 && /^\d+$/.test(parts[0])) out[parts[0]] = { cwd: parts[1], root: parts[2] };
+  }
+  return out;
+}
+
+// The shell (or agent) a terminal window runs: its first child on a pty.
+function childOnPty(pid, psText, pty) {
+  var lines = String(psText || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var p = lines[i].trim().split(/\s+/);
+    if (p.length >= 3 && p[1] === String(pid) && p[2] === pty) return p[0];
+  }
+  return "";
+}
+
+// The rule whose folder contains cwd, preferring the deepest folder.
+function projectFor(rules, cwd) {
+  var best = null;
+  if (!cwd || !Array.isArray(rules)) return null;
+  for (var i = 0; i < rules.length; i++) {
+    var r = rules[i];
+    if (!r || typeof r.path !== "string") continue;
+    var path = r.path.replace(/\/+$/, "");
+    if (cwd === path || cwd.indexOf(path + "/") === 0) {
+      if (!best || path.length > best.path.length) best = r;
+    }
+  }
+  return best;
+}
+
+function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir, monitorsText, cwdText) {
   var clients;
   try { clients = JSON.parse(clientsText); } catch (e) { return []; }
   if (!Array.isArray(clients)) return [];
   var monitors = monitorsById(monitorsText);
+  var cwds = cwdsByPid(cwdText);
   var procs = processes(psText);
   var state = parseState(stateText);
   var ghostty = ghosttyPids(ghosttyText, runtimeDir);
@@ -398,6 +434,8 @@ function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir, moni
     var mine = saved && saved.pid === String(c.pid);
     var mon = monitors[c.monitor] || null;
     var wsId = c.workspace ? c.workspace.id : null;
+    var shellPid = childOnPty(c.pid, psText, pty);
+    var where = cwds[shellPid] || { cwd: "", root: "" };
     out.push({
       address: String(c.address || "").replace(/^0x/, ""),
       pid: String(c.pid),
@@ -411,6 +449,8 @@ function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir, moni
       w: c.size ? c.size[0] : 16,
       h: c.size ? c.size[1] : 9,
       // Where the window sits on its monitor, and whether it's on screen now.
+      cwd: where.cwd,
+      root: where.root,
       monitor: mon ? mon.name : "",
       lx: c.at && mon ? c.at[0] - mon.x : 0,
       ly: c.at && mon ? c.at[1] - mon.y : 0,
@@ -464,7 +504,7 @@ function match(list, target) {
 //   @@THEME <name>\t<background image>   then that theme's colors.toml
 function parseCatalog(text) {
   var out = { wallpaper: "", aether: false, aetherInstalled: false, aetherVersion: "",
-              ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] };
+              ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [], own: [] };
   var section = "", buf = [], theme = null, byName = {};
 
   function flush() {
@@ -496,6 +536,7 @@ function parseCatalog(text) {
     }
     else if (line === "@@MODES") section = "modes";
     else if (line === "@@GHOSTTY") { out.ghostty = true; section = ""; }
+    else if (line.indexOf("@@OMBRE ") === 0) { out.own.push(line.slice(8).trim()); section = ""; }
     else if (line === "@@LAUNCHER") { out.launcher = true; section = ""; }
     else if (line === "@@WALLPAPERS") section = "wallpapers";
     else if (line.indexOf("@@THEME ") === 0) {

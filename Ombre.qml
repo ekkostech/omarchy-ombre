@@ -42,7 +42,7 @@ Item {
   property bool configLoaded: false
 
   // Catalog of moods, themes and wallpapers, refreshed whenever the picker opens.
-  property var catalog: ({ wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [] })
+  property var catalog: ({ wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [], own: [] })
   property bool catalogLoaded: false
   property real catalogAt: 0
   property string tab: "moods"
@@ -95,6 +95,12 @@ Item {
   // saved look with an optional wallpaper. Terminals already open when the
   // plugin starts are left alone.
   property var newDefault: ({ mode: "none", look: null, wallpaper: null })
+
+  // Project rules: a terminal whose working folder is inside a rule's folder
+  // gets that rule's look and wallpaper when first seen, and again whenever
+  // it moves to a different project's folder. Manual changes stick until then.
+  property var projects: []
+  property var appliedProject: ({})   // address -> rule path last applied
   property var seen: ({})          // address -> true for terminals already handled
   property bool seenReady: false
   property int newWindowTries: 0
@@ -109,7 +115,8 @@ Item {
   }
   // Wallpapers to pick from: the current one, Aether's library, then each theme's.
   readonly property var wallpaperChoices: {
-    var out = root.moodSources.filter(Palette.isImagePath)
+    var out = catalog.own.filter(Palette.isImagePath)
+    root.moodSources.forEach(function (w) { if (Palette.isImagePath(w) && out.indexOf(w) < 0) out.push(w) })
     for (var i = 0; i < catalog.themes.length; i++) {
       var img = catalog.themes[i].image
       if (Palette.isImagePath(img) && out.indexOf(img) < 0) out.push(img)
@@ -207,6 +214,7 @@ Item {
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
       wallpapers: root.wallpaperChoices,
+      projects: root.projects.map(function (r) { return { path: r.path, look: root.ruleLabel(r) } }),
       wallpaper: root.catalog.wallpaper,
       aether: root.catalog.aether,
       aetherInstalled: root.catalog.aetherInstalled,
@@ -250,7 +258,8 @@ Item {
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
       || v === "pulse:now" || v === "pulse:stop"
-      || v === "default:from"
+      || v === "default:from" || v === "project:from"
+      || v.indexOf("project:remove:/") === 0
       || (v.indexOf("default:") === 0 && v !== "default:next" && v !== "default:reset" && root.validSpec(v.slice(8)))
   }
 
@@ -290,6 +299,11 @@ Item {
           root.commit(root.indexOf(hits[j].pty), Palette.tintLook(root.nextHue(hits[j].look)))
         continue
       }
+      if (req.value === "project:from") {
+        if (hits.length > 0) root.saveProjectFrom(hits[0])
+        continue
+      }
+      if (req.value.indexOf("project:remove:") === 0) { root.removeProject(req.value.slice(15)); continue }
       if (req.value === "default:from") {
         if (hits.length > 0) root.saveDefaultFrom(hits[0])
         continue
@@ -338,9 +352,10 @@ Item {
     var b = output.indexOf("\n@@STATE@@\n")
     var c = output.indexOf("\n@@GHOSTTY@@\n")
     var d = output.indexOf("\n@@MONITORS@@\n")
-    if (a < 0 || b < 0 || c < 0 || d < 0) return null
+    var e = output.indexOf("\n@@CWD@@\n")
+    if (a < 0 || b < 0 || c < 0 || d < 0 || e < 0) return null
     var list = Palette.terminals(output.slice(0, a), output.slice(a + 8, b), output.slice(b + 11, c),
-                                 output.slice(c + 13, d), root.runtimeDir, output.slice(d + 14))
+                                 output.slice(c + 13, d), root.runtimeDir, output.slice(d + 14, e), output.slice(e + 9))
     for (var i = 0; i < list.length; i++) {
       var k = root.known[list[i].pty]
       if (k && k.pid === list[i].pid) {
@@ -365,6 +380,7 @@ Item {
     for (var w = 0; w < waiting.length; w++) {
       for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w]) root.startPulse(list[t])
     }
+    root.applyProjects(list)
     root.applyDefaults(list)
     if (root.reshadowAll) {
       root.reshadowAll = false
@@ -584,6 +600,89 @@ Item {
     root.saveConfig()
     var term = root.selectedTerm
     if (term && term.wallpaper) root.setWallpaper(root.current, { path: term.wallpaper.path, strength: value })
+  }
+
+  // ---- Project rules --------------------------------------------------------
+  function applyProjects(list) {
+    if (root.projects.length === 0) return
+    var applied = Object.assign({}, root.appliedProject)
+    var changed = false
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i]
+      var rule = Palette.projectFor(root.projects, t.cwd)
+      var key = rule ? rule.path : ""
+      if (applied[t.address] === key) continue
+      applied[t.address] = key
+      changed = true
+      if (!rule) continue
+      var index = root.indexOf(t.pty)
+      if (rule.look) root.commit(index, rule.look)
+      if (t.wallpaperReady) root.setWallpaper(index, rule.wallpaper || null)
+      if (!root.seen[t.address]) root.markSeen([t])
+    }
+    if (changed) root.appliedProject = applied
+  }
+
+  // Save the selected terminal's look for its project folder (git root, else cwd).
+  function saveProjectFrom(term) {
+    if (!term) return
+    var path = term.root || term.cwd
+    if (!path) { root.hoverText = "Can't tell this terminal's folder."; return }
+    if (!term.look && !term.wallpaper) { root.hoverText = "Give this terminal a look first."; return }
+    root.setProject(path, term.look, term.wallpaper)
+    root.hoverText = Palette.basename(path) + " terminals will open as " + root.ruleLabel(root.projectRule(path))
+  }
+
+  // IPC: define a rule from JSON {path, look: <look value>, wallpaper, strength}.
+  function defineProject(arg) {
+    var req
+    try { req = JSON.parse(arg) } catch (e) { return "error: bad request" }
+    if (!req || typeof req.path !== "string" || req.path.charAt(0) !== "/") return "error: path must be absolute"
+    var look = null
+    if (req.look) {
+      if (!root.validSpec(String(req.look))) return "error: unknown look " + req.look
+      var r = root.resolveSpec(String(req.look))
+      if (r.wait) return "error: still loading looks, try again"
+      if (r.error) return "error: " + r.error
+      look = r.look
+    }
+    var wp = Palette.isImagePath(req.wallpaper) ? { path: req.wallpaper, strength: Number(req.strength) || root.strength } : null
+    return root.setProject(req.path, look, wp)
+  }
+
+  function projectRule(path) {
+    for (var i = 0; i < root.projects.length; i++) if (root.projects[i].path === path) return root.projects[i]
+    return null
+  }
+
+  function setProject(path, look, wallpaper) {
+    path = String(path || "").replace(/\/+$/, "")
+    if (path.charAt(0) !== "/") return "error: path must be absolute"
+    var rule = { path: path, look: Palette.normalizeLook(look), wallpaper: Palette.normalizeWallpaper(wallpaper) }
+    var next = root.projects.filter(function (r) { return r.path !== path })
+    next.push(rule)
+    next.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0 })
+    root.projects = next
+    root.appliedProject = ({})
+    root.saveConfig()
+    root.scan()
+    return "ok"
+  }
+
+  function removeProject(path) {
+    path = String(path || "").replace(/\/+$/, "")
+    root.projects = root.projects.filter(function (r) { return r.path !== path })
+    root.appliedProject = ({})
+    root.saveConfig()
+    return "ok"
+  }
+
+  function ruleLabel(rule) {
+    if (!rule) return ""
+    var parts = []
+    if (rule.look) parts.push(rule.look.kind === "tint" ? Palette.lookLabel(rule.look) : Palette.pretty(rule.look.id))
+    if (rule.wallpaper) parts.push(Palette.basename(rule.wallpaper.path) + " wallpaper")
+    return parts.join(" with ") || "their own colors"
   }
 
   // ---- Default look for new terminals -----------------------------------
@@ -810,7 +909,8 @@ Item {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
       "sh", root.configFile, JSON.stringify({
         borders: root.borders, pulse: root.pulse, textShadow: root.textShadow, strength: root.strength,
-        withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault
+        withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
+        projects: root.projects
       })]
     configWriter.running = true
   }
@@ -824,6 +924,13 @@ Item {
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
+      if (cfg && Array.isArray(cfg.projects)) {
+        root.projects = cfg.projects.map(function (r) {
+          return r && typeof r.path === "string" && r.path.charAt(0) === "/"
+            ? { path: r.path.replace(/\/+$/, ""), look: Palette.normalizeLook(r.look), wallpaper: Palette.normalizeWallpaper(r.wallpaper) }
+            : null
+        }).filter(function (r) { return r !== null })
+      }
       if (cfg && cfg.newTerminals && typeof cfg.newTerminals === "object") {
         var mode = cfg.newTerminals.mode
         root.newDefault = {
@@ -869,10 +976,16 @@ Item {
     + 'for f in "$1"/pts-*; do [ -f "$f" ] && printf "%s %s\\n" "${f##*/}" "$(cat "$f")"; done; '
     + 'printf "\\n@@GHOSTTY@@\\n"; '
     + 'for p in $(pgrep -x ghostty); do printf "%s\\t%s\\n" "$p" "$(tr "\\0" " " < /proc/$p/cmdline 2>/dev/null)"; done; '
-    + 'printf "\\n@@MONITORS@@\\n"; hyprctl -j monitors; true'
+    + 'printf "\\n@@MONITORS@@\\n"; hyprctl -j monitors; printf "\\n@@CWD@@\\n"; '
+    // Working folder and git root of every process on a pty, with no forks
+    // beyond one readlink each.
+    + 'for p in $(ps -e -o pid=,tty= | awk \'$2 ~ /^pts/ {print $1}\'); do d=$(readlink /proc/$p/cwd 2>/dev/null) || continue; '
+    + 'r=$d; while [ -n "$r" ] && [ "$r" != / ] && [ ! -e "$r/.git" ]; do r=${r%/*}; done; [ -e "$r/.git" ] || r=; '
+    + 'printf "%s\\t%s\\t%s\\n" "$p" "$d" "$r"; done; true'
 
   readonly property string catalogScript:
     'printf "@@WALLPAPER %s\\n" "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n'
+    + 'for f in "$HOME"/Wallpapers/Ombre/*; do [ -f "$f" ] && printf "@@OMBRE %s\\n" "$f"; done\n'
     + 'command -v ghostty >/dev/null 2>&1 && printf "@@GHOSTTY\\n"\n'
     + 'desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"\n'
     + '[ -x "$HOME/.local/bin/ombre-ghostty" ] && grep -qx "# Written by Ombre" "$desktop" 2>/dev/null && printf "@@LAUNCHER\\n"\n'
@@ -1003,6 +1116,8 @@ Item {
   Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
   Timer { interval: 100; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
   Timer { id: restoreAgain; interval: 250; onTriggered: root.onRestoreAgain() }
+  // A title change often means an agent just started in some folder.
+  Timer { id: projectScan; interval: 10000; onTriggered: root.scan() }
   Timer {
     id: newWindowScan
     interval: 600
@@ -1037,7 +1152,7 @@ Item {
       case "openwindow":
         // A window can take seconds to start its shell; keep looking until it
         // shows up in a scan.
-        if (root.newDefault.mode !== "none" || root.textShadow) {
+        if (root.newDefault.mode !== "none" || root.textShadow || root.projects.length > 0) {
           var aw = Object.assign({}, root.awaiting)
           aw[data.split(",")[0]] = true
           root.awaiting = aw
@@ -1045,7 +1160,10 @@ Item {
           newWindowScan.restart()
         }
         break
-      case "windowtitlev2": root.onAgentTitle(data); break
+      case "windowtitlev2":
+        root.onAgentTitle(data)
+        if (root.projects.length > 0 && !projectScan.running) projectScan.start()
+        break
       }
     }
   }
@@ -1313,6 +1431,7 @@ Item {
           else if (k === Qt.Key_P) root.setPulse(!root.pulse)
           else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
+          else if (k === Qt.Key_F && root.selectedTerm) root.saveProjectFrom(root.selectedTerm)
           else if (n === 0) return
           else if (k === Qt.Key_Right || k === Qt.Key_L) root.current = (root.current + 1) % n
           else if (k === Qt.Key_Left || k === Qt.Key_H) root.current = (root.current - 1 + n) % n
@@ -1580,7 +1699,7 @@ Item {
                 delegate: TabButton {
                   required property var modelData
                   name: modelData
-                  text: modelData === "default" ? "New terminals" : Palette.pretty(modelData)
+                  text: modelData === "default" ? "Projects & new terminals" : Palette.pretty(modelData)
                 }
               }
             }
@@ -1921,6 +2040,97 @@ Item {
             spacing: Style.space(10)
 
             Text {
+              text: "By project folder"
+              color: root.text
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "A terminal working inside one of these folders gets that project's look. "
+                + (root.selectedTerm && (root.selectedTerm.root || root.selectedTerm.cwd)
+                  ? "The selected terminal is in " + (root.selectedTerm.root || root.selectedTerm.cwd) + "." : "")
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(10)
+              TextButton {
+                label: root.selectedTerm && (root.selectedTerm.root || root.selectedTerm.cwd)
+                  ? "Use this look for " + Palette.basename(root.selectedTerm.root || root.selectedTerm.cwd) : "Use this look for its folder"
+                opacity: root.selectedTerm && (root.selectedTerm.look || root.selectedTerm.wallpaper) && (root.selectedTerm.root || root.selectedTerm.cwd) ? 1 : 0.4
+                onActivated: root.saveProjectFrom(root.selectedTerm)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "or press F"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(8)
+              Repeater {
+                model: root.opened && root.tab === "default" ? root.projects : []
+                delegate: Rectangle {
+                  id: ruleChip
+                  required property var modelData
+                  readonly property string accentHex: Palette.lookAccent(modelData.look) || root.accentHex
+                  width: ruleRow.implicitWidth + Style.space(16)
+                  height: ruleRow.implicitHeight + Style.space(8)
+                  radius: Style.cornerRadius
+                  color: "transparent"
+                  border.width: Math.max(1, Style.space(1))
+                  border.color: Util.alpha(accentHex, 0.7)
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onEntered: root.hoverText = ruleChip.modelData.path
+                    onExited: root.hoverText = ""
+                  }
+
+                  Row {
+                    id: ruleRow
+                    anchors.centerIn: parent
+                    spacing: Style.space(8)
+                    Rectangle { width: Style.space(10); height: width; radius: width / 2; color: ruleChip.accentHex; anchors.verticalCenter: parent.verticalCenter }
+                    Text {
+                      text: Palette.basename(ruleChip.modelData.path) + "  " + root.ruleLabel(ruleChip.modelData)
+                      color: root.text
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                      text: "\u00d7"
+                      color: removeArea.containsMouse ? root.text : root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      MouseArea {
+                        id: removeArea
+                        anchors.fill: parent
+                        anchors.margins: -Style.space(4)
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.removeProject(ruleChip.modelData.path)
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Rectangle { width: parent.width; height: Math.max(1, Style.space(1)); color: root.subtle }
+
+            Text {
               text: "When a new terminal opens, give it:"
               color: root.text
               font.family: root.fontFamily
@@ -1983,7 +2193,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · B borders · P pulse · T text shadow · Esc"
+              || "Hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · F folder · B borders · P pulse · T text shadow · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
