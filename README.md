@@ -1,5 +1,7 @@
 # Ombre
 
+![Ombre](banner.jpg)
+
 *Om-bray.* An ombre shades one colour into another; this shades each of your Omarchy terminals its own way.
 
 An [Omarchy](https://omarchy.org) shell plugin for telling terminal windows apart.

@@ -66,7 +66,10 @@ Item {
   readonly property bool pulsing: Object.keys(pulses).length > 0
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/ombre"
+  // State lives in the user's private runtime dir, or under the state dir;
+  // never in /tmp, where another local user could pre-create it.
+  readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR")
+    || (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state"))) + "/ombre"
   readonly property string configFile:
     (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/ombre.json"
   readonly property string pluginDir:
@@ -1048,7 +1051,9 @@ Item {
   //   ghostty PID CONFDIR SHADOW STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
   //     SHADOW is dark, light or -; STRENGTH PATH are "- -" for no wallpaper
   readonly property string writerScript:
-    'mkdir -p "$1/ghostty"; d=$1; plug=$2\n'
+    'umask 077; d=$1; plug=$2; mkdir -p "$d/ghostty" 2>/dev/null\n'
+    + 'if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then echo "ombre: $d is not a private directory owned by you" >&2; exit 1; fi\n'
+    + 'chmod 700 "$d"\n'
     + 'while IFS= read -r line; do\n'
     + '  op=${line%% *}; rest=${line#* }; key=${rest%% *}; arg=${rest#* }\n'
     + '  case $op in\n'
@@ -1064,7 +1069,8 @@ Item {
     + '      case $key in ""|*[!0-9]*) continue ;; esac\n'
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
     + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; path=${rest#* }\n'
-    + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac; mkdir -p "$cdir"\n'
+    + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
+    + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
     + '        case $shadow in dark|light)\n'

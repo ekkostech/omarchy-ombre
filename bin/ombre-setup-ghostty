@@ -35,8 +35,23 @@ cat >"$launcher" <<'EOF'
 # optional config file named after the process id. Ombre writes a
 # wallpaper there and sends the window SIGUSR2, so one window's wallpaper can
 # change while the program inside keeps running.
-dir="${XDG_RUNTIME_DIR:-/tmp}/ombre/ghostty"
-mkdir -p "$dir"
+# The config directory must be private to this user: the user's runtime dir
+# when there is one, otherwise a 0700 directory under the user's state dir.
+# Never a shared location such as /tmp, where another local user could plant
+# a config file. If the directory can't be trusted, run Ghostty plainly.
+umask 077
+if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ]; then
+  dir="$XDG_RUNTIME_DIR/ombre/ghostty"
+else
+  dir="${XDG_STATE_HOME:-$HOME/.local/state}/ombre/ghostty"
+fi
+mkdir -p "$dir" 2>/dev/null
+if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ]; then
+  echo "ombre-ghostty: $dir is not a private directory owned by you; starting Ghostty without a per-window config" >&2
+  exec ghostty --gtk-single-instance=false "$@"
+fi
+chmod 700 "$dir"
+rm -f "$dir/$$.conf"
 for f in "$dir"/*.conf; do
   [ -e "$f" ] || continue
   pid=${f##*/}; pid=${pid%.conf}
