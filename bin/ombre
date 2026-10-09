@@ -14,6 +14,7 @@
 #   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15]  Ghostty only
 #   ombre wallpaper none       remove the focused terminal's wallpaper
 #   ombre setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
+#   ombre hide /path/to/wallpaper.jpg   hide a wallpaper from the picker's strips (file untouched); 'unhide' or 'unhide all'
 #   ombre borders on|off       follow the look with the window border
 #   ombre pulse on|off         pulse a terminal's border when its agent finishes
 #   ombre shadow on|off        drop shadow under the text (Ghostty windows)
@@ -36,7 +37,7 @@ set -euo pipefail
 
 id="ekkostech.ombre"
 
-usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 call() {
   local out
@@ -52,6 +53,7 @@ call() {
 case ${1:-} in
   "") exec omarchy-shell shell toggle "$id" '{}' ;;
   -h|--help) usage ;;
+  --version) jq -r '"ombre " + .version' "$(dirname "$(readlink -f "$0")")/../manifest.json"; exit ;;
   --list)
     call state "" # the first call starts a fresh scan
     sleep 0.3
@@ -82,6 +84,8 @@ case ${1:-} in
     [[ -n ${2:-} ]] || usage 1
     if [[ $2 == none ]]; then set -- "wallpaper:none" "${@:3}"
     else set -- "wallpaper:$(readlink -f "$2")" "${@:3}"; fi ;;
+  hide) [[ -n ${2:-} ]] || usage 1; call hideSource "$(readlink -f "$2")"; exit ;;
+  unhide) [[ -n ${2:-} ]] || usage 1; [[ $2 == all ]] && call unhideSource "*" || call unhideSource "$(readlink -f "$2")"; exit ;;
   borders)
     case ${2:-} in on) call setBorders true ;; off) call setBorders false ;; *) usage 1 ;; esac
     exit ;;

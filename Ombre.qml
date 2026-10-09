@@ -35,6 +35,8 @@ Item {
   property bool borders: true
   property bool pulse: true
   property bool textShadow: false
+  property var hiddenSources: []     // wallpaper paths hidden from the strips (files untouched)
+  property bool showHidden: false
   property bool reshadowAll: false
   property real strength: Palette.DEFAULT_STRENGTH
   property bool withWallpaper: true
@@ -106,21 +108,25 @@ Item {
   property int newWindowTries: 0
   property var awaiting: ({})     // addresses of new windows not yet seen in a scan
   property bool tabChosen: false
-  readonly property var moodSources: {
+  readonly property var allMoodSources: {
     var out = []
     if (catalog.wallpaper) out.push(catalog.wallpaper)
     for (var i = 0; i < catalog.wallpapers.length; i++)
       if (out.indexOf(catalog.wallpapers[i]) < 0) out.push(catalog.wallpapers[i])
     return out
   }
+  readonly property var moodSources: showHidden ? allMoodSources
+    : allMoodSources.filter(function (p) { return hiddenSources.indexOf(p) < 0 })
+  readonly property int hiddenCount: hiddenSources.length
   // Wallpapers to pick from: the current one, Aether's library, then each theme's.
   readonly property var wallpaperChoices: {
     var out = catalog.own.filter(Palette.isImagePath)
-    root.moodSources.forEach(function (w) { if (Palette.isImagePath(w) && out.indexOf(w) < 0) out.push(w) })
+    root.allMoodSources.forEach(function (w) { if (Palette.isImagePath(w) && out.indexOf(w) < 0) out.push(w) })
     for (var i = 0; i < catalog.themes.length; i++) {
       var img = catalog.themes[i].image
       if (Palette.isImagePath(img) && out.indexOf(img) < 0) out.push(img)
     }
+    if (!showHidden) out = out.filter(function (p) { return hiddenSources.indexOf(p) < 0 })
     return out
   }
   readonly property string activeMoodSource: moodSource || catalog.wallpaper
@@ -448,6 +454,22 @@ Item {
     root.moodRunning = ""
     root.nextMoods()
     if (root.requests.length > 0) root.scan()
+  }
+
+  // Hide a wallpaper from the strips. Only the entry goes; the file stays.
+  function hideSource(path) {
+    if (!path || root.hiddenSources.indexOf(path) >= 0) return "ok"
+    root.hiddenSources = root.hiddenSources.concat([path])
+    if (root.moodSource === path) root.moodSource = ""
+    root.saveConfig()
+    root.hoverText = "Hidden " + Palette.basename(path) + " (file untouched). Press H to show hidden ones."
+    return "ok"
+  }
+
+  function unhideSource(path) {
+    root.hiddenSources = path === "*" ? [] : root.hiddenSources.filter(function (p) { return p !== path })
+    root.saveConfig()
+    return "ok"
   }
 
   function pickSource(path) {
@@ -909,6 +931,7 @@ Item {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
       "sh", root.configFile, JSON.stringify({
         borders: root.borders, pulse: root.pulse, textShadow: root.textShadow, strength: root.strength,
+        hiddenSources: root.hiddenSources,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
         projects: root.projects
       })]
@@ -921,6 +944,7 @@ Item {
       if (cfg && typeof cfg.borders === "boolean") root.borders = cfg.borders
       if (cfg && typeof cfg.pulse === "boolean") root.pulse = cfg.pulse
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
+      if (cfg && Array.isArray(cfg.hiddenSources)) root.hiddenSources = cfg.hiddenSources.filter(Palette.isImagePath)
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
@@ -1427,6 +1451,11 @@ Item {
           else if (k === Qt.Key_Tab) root.nextTab(1)
           else if (k === Qt.Key_Backtab) root.nextTab(-1)
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
+          else if (k === Qt.Key_X && root.tab === "moods" && root.activeMoodSource) {
+            if (root.hiddenSources.indexOf(root.activeMoodSource) >= 0) root.unhideSource(root.activeMoodSource)
+            else root.hideSource(root.activeMoodSource)
+          }
+          else if (k === Qt.Key_H && (root.tab === "moods" || root.tab === "wallpapers")) root.showHidden = !root.showHidden
           else if (k === Qt.Key_B) root.setBorders(!root.borders)
           else if (k === Qt.Key_P) root.setPulse(!root.pulse)
           else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
@@ -1713,6 +1742,22 @@ Item {
               spacing: Style.space(14)
 
               Text {
+                visible: root.hiddenCount > 0 && (root.tab === "moods" || root.tab === "wallpapers")
+                text: (root.showHidden ? "Hide hidden (" : "Show hidden (") + root.hiddenCount + ")"
+                color: hiddenArea.containsMouse ? root.text : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                MouseArea {
+                  id: hiddenArea
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.showHidden = !root.showHidden
+                }
+              }
+
+              Text {
                 visible: (root.tab === "moods" || root.tab === "themes") && root.selectedTakesWallpaper
                 text: (root.withWallpaper ? "\uDB80\uDD32" : "\uDB80\uDD31") + " with its wallpaper"
                 color: withArea.containsMouse ? root.text : root.muted
@@ -1817,14 +1862,22 @@ Item {
                       }
                     }
 
+                    opacity: root.hiddenSources.indexOf(modelData) >= 0 ? 0.35 : 1
+
                     MouseArea {
                       id: sourceArea
                       anchors.fill: parent
                       hoverEnabled: true
+                      acceptedButtons: Qt.LeftButton | Qt.RightButton
                       cursorShape: Qt.PointingHandCursor
-                      onEntered: root.hoverText = Palette.basename(sourceTile.modelData)
+                      onEntered: root.hoverText = Palette.basename(sourceTile.modelData) + " · right-click to hide"
                       onExited: root.hoverText = ""
-                      onClicked: root.pickSource(sourceTile.modelData)
+                      onClicked: function (mouse) {
+                        if (mouse.button === Qt.RightButton) {
+                          if (root.hiddenSources.indexOf(sourceTile.modelData) >= 0) root.unhideSource(sourceTile.modelData)
+                          else root.hideSource(sourceTile.modelData)
+                        } else root.pickSource(sourceTile.modelData)
+                      }
                     }
                   }
                 }
@@ -2017,10 +2070,13 @@ Item {
                       font.pixelSize: Style.font.bodySmall
                     }
 
+                    opacity: wallTile.modelData && root.hiddenSources.indexOf(wallTile.modelData) >= 0 ? 0.35 : 1
+
                     MouseArea {
                       id: wallArea
                       anchors.fill: parent
                       hoverEnabled: true
+                      acceptedButtons: Qt.LeftButton | Qt.RightButton
                       cursorShape: root.selectedTakesWallpaper ? Qt.PointingHandCursor : Qt.ArrowCursor
                       onEntered: {
                         root.hoverText = wallTile.modelData ? Palette.basename(wallTile.modelData) : "No wallpaper"
@@ -2028,8 +2084,13 @@ Item {
                           root.previewWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
                       }
                       onExited: { root.hoverText = ""; previewEnd.restart() }
-                      onClicked: if (root.selectedTakesWallpaper)
-                        root.setWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                      onClicked: function (mouse) {
+                        if (mouse.button === Qt.RightButton && wallTile.modelData) {
+                          if (root.hiddenSources.indexOf(wallTile.modelData) >= 0) root.unhideSource(wallTile.modelData)
+                          else root.hideSource(wallTile.modelData)
+                        } else if (root.selectedTakesWallpaper)
+                          root.setWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                      }
                     }
                   }
                 }
@@ -2197,7 +2258,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Click a card to select · hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · D default · F folder · B borders · P pulse · T text shadow · Esc"
+              || "Click a card to select · hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · X hide it · H show hidden · D default · F folder · B borders · P pulse · T text shadow · Esc"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

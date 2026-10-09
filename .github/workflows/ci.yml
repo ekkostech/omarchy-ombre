@@ -1,0 +1,19 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --test tests/
+      - name: Manifest sanity
+        run: |
+          node -e '
+            const m = require("./manifest.json");
+            for (const k of ["schemaVersion","id","name","version","author","description","kinds","entryPoints"]) if (!(k in m)) throw new Error("manifest missing " + k);
+            for (const f of Object.values(m.entryPoints)) require("fs").accessSync(f);
+            if (m.version !== require("child_process").execSync("grep -m1 -oE \"^## \\\\[?[0-9.]+\" CHANGELOG.md").toString().replace(/^## \[?/, "").trim()) throw new Error("CHANGELOG top entry must match manifest version " + m.version);
+          '
+      - run: bash -n bin/ombre bin/ombre-setup-ghostty

@@ -83,6 +83,8 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 | `Space` / `Shift+Space` | Next / previous mood, theme or wallpaper |
 | `Tab` | Switch between Moods, Themes, Wallpapers and New terminals |
 | `W` / `Shift+W` | Next / previous wallpaper to make moods from |
+| `X` | Hide that wallpaper from the strips (right-click does too; files are untouched) |
+| `H` | Show / hide the hidden ones |
 | Arrows / `hjkl` | Move between terminals |
 | `D` | Save the selected terminal's look as the default for new terminals |
 | `F` | Use the selected terminal's look for its project folder |
@@ -187,6 +189,15 @@ clean. The border setting is saved in `~/.config/omarchy/ombre.json`.
 - A program that sets its own colors (a few TUIs do) overrides the look while it runs.
 - Hyprland 0.56 draws only one color for a per-window border, so borders are solid rather than gradients.
 - Moods made from a wallpaper show its colors in any terminal; the picture itself only appears in Ghostty.
+
+## Development
+
+```bash
+node --test tests/          # unit tests for the colour and parsing logic
+omarchy plugin validate .   # manifest check
+```
+
+Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Uninstall
 
