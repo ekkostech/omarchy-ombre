@@ -1,4 +1,6 @@
-# Terminal Tint
+# Ombre
+
+*Om-bray.* An ombre shades one colour into another; this shades each of your Omarchy terminals its own way.
 
 An [Omarchy](https://omarchy.org) shell plugin for telling terminal windows apart.
 Give each one its own look while whatever runs inside keeps running: a background
@@ -31,7 +33,7 @@ mood or theme to try it on the real window, click to keep it.
 - **A default for new terminals**: new terminals can open with a saved look (and wallpaper), or each get a different tint automatically so new agents never look alike. Set it in the picker's New terminals tab.
 - **Pulses when an agent is done**: when an agent finishes and waits for you, its terminal's border breathes in its own color until you click into it. Works with agents that show a spinner in the window title (like Claude Code) and with any program that rings the terminal bell. Press `P` to turn it off.
 - **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
-- **Scriptable**: `terminal-tint red --title api` from a shell, a keybinding or an agent.
+- **Scriptable**: `ombre red --title api` from a shell, a keybinding or an agent.
 
 ## Requirements
 
@@ -39,18 +41,18 @@ mood or theme to try it on the real window, click to keep it.
 - **Aether 4 or newer** for moods. Omarchy installs Aether by default; if it's gone, `omarchy pkg add aether`.
 - **Ghostty** for wallpapers: `omarchy install terminal ghostty`, then the one-time setup below.
 
-Tints and themes need nothing else. Terminal Tint checks for Aether and Ghostty
+Tints and themes need nothing else. Ombre checks for Aether and Ghostty
 itself: the first-run notification and the picker's Moods and Wallpapers tabs
-say what's missing and how to get it, and `terminal-tint --check` lists it all.
+say what's missing and how to get it, and `ombre --check` lists it all.
 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/ekkostech/omarchy-terminal-tint.git --enable --yes
+omarchy plugin add https://github.com/ekkostech/omarchy-ombre.git --enable --yes
 omarchy restart shell
 ```
 
-The first time it loads, Terminal Tint shows a notification about what it does
+The first time it loads, Ombre shows a notification about what it does
 and whether wallpapers are ready. Click it to open the picker.
 
 For wallpapers, use Ghostty and run the setup once. The **Set up Ghostty for
@@ -58,13 +60,13 @@ wallpapers** button in the picker's Wallpapers tab does the same as this:
 
 ```bash
 omarchy install terminal ghostty        # if Ghostty isn't your terminal yet
-terminal-tint setup-ghostty
+ombre setup-ghostty
 ```
 
 Then bind a key to open the picker. Add this to `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + ALT + T", "Terminal Tint", "omarchy-shell shell toggle ekkostech.terminal-tint '{}'")
+o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '{}'")
 ```
 
 ## Using the picker
@@ -96,37 +98,37 @@ tints, themes and wallpapers still work.
 
 ## Scripting
 
-`bin/terminal-tint` wraps the plugin's IPC. To use it, link it onto your `PATH`:
+`bin/ombre` wraps the plugin's IPC. To use it, link it onto your `PATH`:
 
 ```bash
-ln -s ~/.config/omarchy/plugins/ekkostech.terminal-tint/bin/terminal-tint ~/.local/bin/
+ln -s ~/.config/omarchy/plugins/ekkostech.ombre/bin/ombre ~/.local/bin/
 ```
 
 ```bash
-terminal-tint                      # open the picker
-terminal-tint red                  # tint the focused terminal
-terminal-tint next                 # cycle the focused terminal
-terminal-tint blue --title api     # every terminal whose title contains "api"
-terminal-tint '#203040' --pid 1234 # any hex color, by terminal pid
-terminal-tint reset --all          # clear everything
-terminal-tint mood:fire --title docs
-terminal-tint mood:ocean@/path/to/wallpaper.jpg
-terminal-tint theme:tokyo-night --pid 1234
-terminal-tint wallpaper ~/Wallpapers/forest.jpg --strength 0.15  # Ghostty
-terminal-tint wallpaper none
-terminal-tint --looks              # list moods, themes and wallpapers
-terminal-tint --check              # what's installed and what's missing
-terminal-tint borders off
-terminal-tint pulse off            # or on; 'pulse now --title api' to try it
-terminal-tint shadow on            # drop shadow under the text in Ghostty windows
-terminal-tint default auto         # new terminals each get a different tint
-terminal-tint default from         # new terminals copy the focused terminal's look
-terminal-tint default none
-terminal-tint --list
+ombre                      # open the picker
+ombre red                  # tint the focused terminal
+ombre next                 # cycle the focused terminal
+ombre blue --title api     # every terminal whose title contains "api"
+ombre '#203040' --pid 1234 # any hex color, by terminal pid
+ombre reset --all          # clear everything
+ombre mood:fire --title docs
+ombre mood:ocean@/path/to/wallpaper.jpg
+ombre theme:tokyo-night --pid 1234
+ombre wallpaper ~/Wallpapers/forest.jpg --strength 0.15  # Ghostty
+ombre wallpaper none
+ombre --looks              # list moods, themes and wallpapers
+ombre --check              # what's installed and what's missing
+ombre borders off
+ombre pulse off            # or on; 'pulse now --title api' to try it
+ombre shadow on            # drop shadow under the text in Ghostty windows
+ombre default auto         # new terminals each get a different tint
+ombre default from         # new terminals copy the focused terminal's look
+ombre default none
+ombre --list
 ```
 
 Under the hood these call
-`omarchy-shell shell call ekkostech.terminal-tint apply '{"value":"red","target":"title:api"}'`.
+`omarchy-shell shell call ekkostech.ombre apply '{"value":"red","target":"title:api"}'`.
 The targets are `focused`, `title:TEXT`, `pid:N`, `address:HEX` and `all`. The
 values are a hue name, `#rrggbb`, `next`, `reset`, `mood:NAME[@WALLPAPER]`,
 `theme:NAME`, `wallpaper:/path/to/image.jpg` or `wallpaper:none`.
@@ -149,14 +151,14 @@ Omarchy's foot template does.
 
 Wallpapers use Ghostty's `background-image` option. Out of the box, Omarchy runs
 every Ghostty window in one shared process, so a config change would hit all of
-them. `terminal-tint setup-ghostty` installs a small launcher
-(`~/.local/bin/terminal-tint-ghostty`) and points Ghostty's desktop entry at it.
+them. `ombre setup-ghostty` installs a small launcher
+(`~/.local/bin/ombre-ghostty`) and points Ghostty's desktop entry at it.
 Each new window then runs as its own process with an optional config file of
-its own, `$XDG_RUNTIME_DIR/terminal-tint/ghostty/PID.conf`. Setting a
+its own, `$XDG_RUNTIME_DIR/ombre/ghostty/PID.conf`. Setting a
 wallpaper writes that file and sends the window `SIGUSR2`, which makes Ghostty
 reload it. The plugin only signals processes it has confirmed are Ghostty
 windows started by the launcher. Omarchy's theme switch reloads Ghostty the same
-way, so wallpapers survive it. `terminal-tint setup-ghostty --undo` reverts the
+way, so wallpapers survive it. `ombre setup-ghostty --undo` reverts the
 setup.
 
 The pulse watches Hyprland's window events. A title that switches from a
@@ -165,9 +167,9 @@ the window rang the bell. Either starts the pulse unless the window already has
 focus. Focusing the window, or the agent starting work again, stops it. Ghostty
 reports bells by default; foot only with `[bell] urgent=yes` in `foot.ini`.
 
-Looks are recorded per pty in `$XDG_RUNTIME_DIR/terminal-tint/` so the picker
+Looks are recorded per pty in `$XDG_RUNTIME_DIR/ombre/` so the picker
 can show them. Each record is tied to the terminal's pid, so a reused pty starts
-clean. The border setting is saved in `~/.config/omarchy/terminal-tint.json`.
+clean. The border setting is saved in `~/.config/omarchy/ombre.json`.
 
 ## Compatibility
 
@@ -182,9 +184,9 @@ clean. The border setting is saved in `~/.config/omarchy/terminal-tint.json`.
 ## Uninstall
 
 ```bash
-terminal-tint reset --all
-terminal-tint setup-ghostty --undo   # only if you set up wallpapers
-omarchy plugin remove ekkostech.terminal-tint
+ombre reset --all
+ombre setup-ghostty --undo   # only if you set up wallpapers
+omarchy plugin remove ekkostech.ombre
 ```
 
 ## License

@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "id": "ekkostech.terminal-tint",
-  "name": "Terminal Tint",
+  "id": "ekkostech.ombre",
+  "name": "Ombre",
   "version": "1.1.0",
   "author": "ekkostech",
   "license": "MIT",
-  "description": "Give each running terminal its own look (a tint, an Aether mood, an Omarchy theme or, in Ghostty, its own wallpaper) and a border that pulses when its agent is done. Picked with live previews, without restarting what runs inside.",
+  "description": "Shade each running terminal its own way: a tint, an Aether mood, an Omarchy theme or, in Ghostty, its own wallpaper and text shadow, with a border that pulses when its agent is done. Picked with live previews, without restarting what runs inside.",
   "kinds": [
     "overlay"
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "TerminalTint.qml"
+    "overlay": "Ombre.qml"
   }
 }

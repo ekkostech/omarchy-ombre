@@ -7,7 +7,7 @@ import qs.Commons
 import qs.Ui
 import "Palette.js" as Palette
 
-// Terminal Tint: give any running terminal window its own look: a background
+// Ombre: give any running terminal window its own look: a background
 // tint, an Aether mood generated from a wallpaper, or a whole Omarchy theme,
 // plus, in Ghostty, its own wallpaper. Looks are escape sequences written to
 // the window's pty (OSC 4/10/11/12), so the program inside keeps running
@@ -19,7 +19,7 @@ Item {
 
   property var shell: null
   property var manifest: null
-  readonly property string pluginId: (manifest && manifest.id) || "ekkostech.terminal-tint"
+  readonly property string pluginId: (manifest && manifest.id) || "ekkostech.ombre"
 
   property bool opened: false
   property var terminals: []
@@ -31,7 +31,7 @@ Item {
   property var requests: []
   property var known: ({})   // pty -> {pid, look, wallpaper} set this session
 
-  // Settings kept in ~/.config/omarchy/terminal-tint.json.
+  // Settings kept in ~/.config/omarchy/ombre.json.
   property bool borders: true
   property bool pulse: true
   property bool textShadow: false
@@ -64,9 +64,9 @@ Item {
   readonly property bool pulsing: Object.keys(pulses).length > 0
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/terminal-tint"
+  readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/ombre"
   readonly property string configFile:
-    (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/terminal-tint.json"
+    (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/ombre.json"
   readonly property string pluginDir:
     decodeURIComponent(String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "")).replace(/\/$/, "")
   property string omarchyPath: Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy"
@@ -131,7 +131,7 @@ Item {
   readonly property string wallpaperBlocker: {
     if (!catalogLoaded) return ""
     if (!catalog.ghostty) return "Wallpapers need Ghostty. Install it and make it your terminal with: omarchy install terminal ghostty"
-    if (!catalog.launcher) return "Wallpapers need Ghostty windows opened through Terminal Tint's launcher."
+    if (!catalog.launcher) return "Wallpapers need Ghostty windows opened through Ombre's launcher."
     if (!selectedTerm) return ""
     if (!selectedTerm.ghostty) return "This window is " + (selectedTerm.cls || "not Ghostty") + ". Wallpapers work in Ghostty windows; open one with Super+Return."
     if (!selectedTerm.wallpaperReady) return "This Ghostty window opened before wallpapers were set up. New Ghostty windows can take one."
@@ -297,7 +297,7 @@ Item {
       if (req.value.indexOf("default:") === 0) {
         var d = root.resolveSpec(req.value.slice(8))
         if (d.wait) { waiting.push(req); continue }
-        if (d.error) { console.warn("terminal-tint:", d.error); continue }
+        if (d.error) { console.warn("ombre:", d.error); continue }
         root.setDefaultLook(d.look, null)
         continue
       }
@@ -313,13 +313,13 @@ Item {
         var wp = path === "none" ? null : { path: path, strength: req.strength }
         for (var w = 0; w < hits.length; w++) {
           if (hits[w].wallpaperReady) root.setWallpaper(root.indexOf(hits[w].pty), wp)
-          else console.warn("terminal-tint: " + hits[w].title + " can't take a wallpaper")
+          else console.warn("ombre: " + hits[w].title + " can't take a wallpaper")
         }
         continue
       }
       var r = root.resolveSpec(req.value)
       if (r.wait) { waiting.push(req); continue }
-      if (r.error) { console.warn("terminal-tint:", r.error); continue }
+      if (r.error) { console.warn("ombre:", r.error); continue }
       for (var k = 0; k < hits.length; k++) root.commit(root.indexOf(hits[k].pty), r.look)
     }
     root.requests = waiting
@@ -508,7 +508,8 @@ Item {
   // pid really is Ghostty before signalling it.
   function sendWallpaper(term, wallpaper) {
     var w = Palette.normalizeWallpaper(wallpaper)
-    root.send("ghostty " + term.pid + " " + root.shadowVariant(term) + " " + (w ? w.strength + " " + w.path : "- -"))
+    root.send("ghostty " + term.pid + " " + (term.confDir || root.runtimeDir + "/ghostty/") + " "
+      + root.shadowVariant(term) + " " + (w ? w.strength + " " + w.path : "- -"))
     // Re-send the look once the reload settles, in case it reset the colors.
     if (root.reshowPtys.indexOf(term.pty) < 0) root.reshowPtys = root.reshowPtys.concat([term.pty])
     reshowLater.restart()
@@ -702,7 +703,7 @@ Item {
   function runSetup() {
     if (setupProc.running) return
     root.setupMessage = "Setting up Ghostty…"
-    setupProc.command = ["bash", root.pluginDir + "/bin/terminal-tint-setup-ghostty"]
+    setupProc.command = ["bash", root.pluginDir + "/bin/ombre-setup-ghostty"]
     setupProc.running = true
   }
 
@@ -854,11 +855,11 @@ Item {
     if (!root.catalog.ghostty)
       notes.push("Wallpapers require Ghostty: run 'omarchy install terminal ghostty', then set it up in the picker's Wallpapers tab.")
     else if (!root.catalog.launcher)
-      notes.push("Wallpapers require Ghostty windows opened through Terminal Tint: set that up in the picker's Wallpapers tab.")
+      notes.push("Wallpapers require Ghostty windows opened through Ombre: set that up in the picker's Wallpapers tab.")
     notes.push("Click to open the picker.")
     var body = notes.join(" ")
-    Quickshell.execDetached([root.omarchyPath + "/bin/omarchy-notification-send", "--app-name", "Terminal Tint",
-      "-g", "\uDB80\uDFD8", "Terminal Tint is installed", body,
+    Quickshell.execDetached([root.omarchyPath + "/bin/omarchy-notification-send", "--app-name", "Ombre",
+      "-g", "\uDB80\uDFD8", "Ombre is installed", body,
       "--exec", "omarchy-shell", "shell", "toggle", root.pluginId, "{}"])
   }
 
@@ -874,7 +875,7 @@ Item {
     'printf "@@WALLPAPER %s\\n" "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n'
     + 'command -v ghostty >/dev/null 2>&1 && printf "@@GHOSTTY\\n"\n'
     + 'desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"\n'
-    + '[ -x "$HOME/.local/bin/terminal-tint-ghostty" ] && grep -qx "# Written by Terminal Tint" "$desktop" 2>/dev/null && printf "@@LAUNCHER\\n"\n'
+    + '[ -x "$HOME/.local/bin/ombre-ghostty" ] && grep -qx "# Written by Ombre" "$desktop" 2>/dev/null && printf "@@LAUNCHER\\n"\n'
     // Aether's CLI arrived in 4.x; never call it on an older build, which might
     // open its window instead. Timeouts keep a stuck call from holding the picker.
     + 'if command -v aether >/dev/null 2>&1; then\n'
@@ -907,7 +908,7 @@ Item {
   //   write PTY SEQUENCE     escape sequence for the terminal (validated hex colors only)
   //   save PTY JSON          remember the look for the picker
   //   forget PTY
-  //   ghostty PID SHADOW STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
+  //   ghostty PID CONFDIR SHADOW STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
   //     SHADOW is dark, light or -; STRENGTH PATH are "- -" for no wallpaper
   readonly property string writerScript:
     'mkdir -p "$1/ghostty"; d=$1; plug=$2\n'
@@ -925,7 +926,8 @@ Item {
     + '    ghostty)\n'
     + '      case $key in ""|*[!0-9]*) continue ;; esac\n'
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
-    + '      shadow=${arg%% *}; rest=${arg#* }; strength=${rest%% *}; path=${rest#* }\n'
+    + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; path=${rest#* }\n'
+    + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac; mkdir -p "$cdir"\n'
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
     + '        case $shadow in dark|light)\n'
@@ -937,7 +939,7 @@ Item {
     + '          echo "background-image-fit = cover"\n'
     + '          printf "background-image-opacity = %s\\n" "$strength"\n'
     + '        fi\n'
-    + '      } > "$d/ghostty/$key.conf" && kill -USR2 "$key" ;;\n'
+    + '      } > "$cdir$key.conf" && kill -USR2 "$key" ;;\n'
     + '  esac\n'
     + 'done 2>/dev/null\n'
 
@@ -989,7 +991,7 @@ Item {
   Process {
     id: configReader
     running: true
-    command: ["sh", "-c", 'cat "$1" 2>/dev/null; true', "sh", root.configFile]
+    command: ["sh", "-c", 'cat "$1" 2>/dev/null || cat "${1%/*}/terminal-tint.json" 2>/dev/null; true', "sh", root.configFile]
     stdout: StdioCollector { onStreamFinished: root.onConfig(text) }
   }
 
@@ -1183,7 +1185,7 @@ Item {
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore
-      WlrLayershell.namespace: "omarchy-terminal-tint-spotlight"
+      WlrLayershell.namespace: "omarchy-ombre-spotlight"
       WlrLayershell.layer: WlrLayer.Top
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
@@ -1275,7 +1277,7 @@ Item {
     }
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omarchy-terminal-tint"
+    WlrLayershell.namespace: "omarchy-ombre"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
@@ -1339,7 +1341,7 @@ Item {
             Text {
               id: titleText
               anchors.left: parent.left
-              text: "Terminal Tint"
+              text: "Ombre"
               color: root.text
               font.family: root.fontFamily
               font.pixelSize: Style.font.heading
@@ -1407,7 +1409,7 @@ Item {
             width: parent.width
             wrapMode: Text.WordWrap
             text: scanner.running ? "Looking for terminals…"
-              : "No terminal windows found. Terminal Tint works with terminals that run one process per window (Ghostty through Terminal Tint's launcher, foot, Alacritty, Kitty)."
+              : "No terminal windows found. Ombre works with terminals that run one process per window (Ghostty through Ombre's launcher, foot, Alacritty, Kitty)."
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.body

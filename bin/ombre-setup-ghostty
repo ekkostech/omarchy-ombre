@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set Ghostty up for Terminal Tint wallpapers, or undo it with --undo.
+# Set Ghostty up for Ombre wallpapers, or undo it with --undo.
 #
 # Wallpapers are a Ghostty config option, so each window needs its own Ghostty
 # process and its own config file. This installs a small launcher that starts
@@ -9,10 +9,10 @@
 
 set -euo pipefail
 
-launcher="$HOME/.local/bin/terminal-tint-ghostty"
+launcher="$HOME/.local/bin/ombre-ghostty"
 desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"
 system_desktop=/usr/share/applications/com.mitchellh.ghostty.desktop
-marker="# Written by Terminal Tint"
+marker="# Written by Ombre"
 
 if [[ ${1:-} == --undo ]]; then
   if [[ -f $desktop ]] && grep -qx "$marker" "$desktop"; then rm -f "$desktop"; fi
@@ -24,18 +24,18 @@ fi
 command -v ghostty >/dev/null || { echo "Ghostty is not installed: omarchy install terminal ghostty" >&2; exit 1; }
 [[ -f $system_desktop ]] || { echo "Can't find $system_desktop" >&2; exit 1; }
 if [[ -f $desktop ]] && ! grep -qx "$marker" "$desktop"; then
-  echo "$desktop already exists and wasn't written by Terminal Tint; leaving it alone." >&2
+  echo "$desktop already exists and wasn't written by Ombre; leaving it alone." >&2
   exit 1
 fi
 
 mkdir -p "$(dirname "$launcher")" "$(dirname "$desktop")"
 cat >"$launcher" <<'EOF'
 #!/bin/sh
-# Terminal Tint's Ghostty launcher: one process per window, each with its own
-# optional config file named after the process id. Terminal Tint writes a
+# Ombre's Ghostty launcher: one process per window, each with its own
+# optional config file named after the process id. Ombre writes a
 # wallpaper there and sends the window SIGUSR2, so one window's wallpaper can
 # change while the program inside keeps running.
-dir="${XDG_RUNTIME_DIR:-/tmp}/terminal-tint/ghostty"
+dir="${XDG_RUNTIME_DIR:-/tmp}/ombre/ghostty"
 mkdir -p "$dir"
 for f in "$dir"/*.conf; do
   [ -e "$f" ] || continue

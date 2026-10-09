@@ -348,17 +348,17 @@ function parseState(text) {
 }
 
 // `pid<TAB>cmdline` lines for running Ghostty processes. A window can take a
-// wallpaper when Terminal Tint's launcher started it with its own config file.
+// wallpaper when Ombre's launcher started it with its own config file.
 function ghosttyPids(ghosttyText, runtimeDir) {
-  var out = { all: {}, ready: {} };
+  var out = { all: {}, ready: {} };   // ready: pid -> directory of its config file
   var lines = String(ghosttyText || "").split("\n");
   for (var i = 0; i < lines.length; i++) {
     var tab = lines[i].indexOf("\t");
     if (tab < 0) continue;
     var pid = lines[i].slice(0, tab).trim();
-    var want = "--config-file=?" + runtimeDir + "/ghostty/" + pid + ".conf";
+    var m = lines[i].slice(tab + 1).match(/--config-file=\?(\S+\/ghostty\/)(\d+)\.conf/);
     out.all[pid] = true;
-    if (lines[i].slice(tab + 1).indexOf(want) >= 0) out.ready[pid] = true;
+    if (m && m[2] === pid) out.ready[pid] = m[1];
   }
   return out;
 }
@@ -416,7 +416,8 @@ function terminals(clientsText, psText, stateText, ghosttyText, runtimeDir, moni
       ly: c.at && mon ? c.at[1] - mon.y : 0,
       visible: !!mon && c.hidden !== true && (wsId === mon.active || (mon.special !== null && wsId === mon.special)),
       ghostty: ghostty.all[String(c.pid)] === true,
-      wallpaperReady: ghostty.ready[String(c.pid)] === true,
+      wallpaperReady: !!ghostty.ready[String(c.pid)],
+      confDir: ghostty.ready[String(c.pid)] || "",
       look: mine ? saved.look : null,
       wallpaper: mine ? saved.wallpaper : null
     });
@@ -459,7 +460,7 @@ function match(list, target) {
 //   @@MODES        then `aether --list-modes --json`  (only with Aether 4 or newer)
 //   @@WALLPAPERS   then `aether --list-wallpapers --json`
 //   @@GHOSTTY      Ghostty is installed
-//   @@LAUNCHER     Terminal Tint's Ghostty launcher is set up
+//   @@LAUNCHER     Ombre's Ghostty launcher is set up
 //   @@THEME <name>\t<background image>   then that theme's colors.toml
 function parseCatalog(text) {
   var out = { wallpaper: "", aether: false, aetherInstalled: false, aetherVersion: "",

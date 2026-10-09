@@ -1,36 +1,36 @@
 #!/usr/bin/env bash
-# terminal-tint: script the Terminal Tint plugin from a shell or a keybinding.
+# ombre: script the Ombre plugin from a shell or a keybinding.
 #
-#   terminal-tint                      open the picker
-#   terminal-tint red                  tint the focused terminal
-#   terminal-tint next                 cycle the focused terminal through the hues
-#   terminal-tint reset                clear the focused terminal
-#   terminal-tint blue --title api     tint every terminal whose title contains "api"
-#   terminal-tint '#203040' --pid 1234 any hex color; target a terminal by pid
-#   terminal-tint reset --all          clear every terminal
-#   terminal-tint mood:fire            an Aether mood from the current wallpaper
-#   terminal-tint mood:ocean@/path/to/wallpaper.jpg
-#   terminal-tint theme:tokyo-night    any installed Omarchy theme
-#   terminal-tint wallpaper /path/to/wallpaper.jpg [--strength 0.15]  Ghostty only
-#   terminal-tint wallpaper none       remove the focused terminal's wallpaper
-#   terminal-tint setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
-#   terminal-tint borders on|off       follow the look with the window border
-#   terminal-tint pulse on|off         pulse a terminal's border when its agent finishes
-#   terminal-tint shadow on|off        drop shadow under the text (Ghostty windows)
-#   terminal-tint pulse now|stop       start or stop a pulse by hand (with a target)
-#   terminal-tint default none|auto    what new terminals get: nothing, or a different tint each
-#   terminal-tint default from         new terminals copy the focused (or targeted) terminal's look
-#   terminal-tint default theme:nord   new terminals get this look (any look value)
-#   terminal-tint --list               show terminals and their looks
-#   terminal-tint --looks              list the moods, themes and wallpapers
-#   terminal-tint --check              what's installed, and what moods and wallpapers still need
+#   ombre                      open the picker
+#   ombre red                  tint the focused terminal
+#   ombre next                 cycle the focused terminal through the hues
+#   ombre reset                clear the focused terminal
+#   ombre blue --title api     tint every terminal whose title contains "api"
+#   ombre '#203040' --pid 1234 any hex color; target a terminal by pid
+#   ombre reset --all          clear every terminal
+#   ombre mood:fire            an Aether mood from the current wallpaper
+#   ombre mood:ocean@/path/to/wallpaper.jpg
+#   ombre theme:tokyo-night    any installed Omarchy theme
+#   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15]  Ghostty only
+#   ombre wallpaper none       remove the focused terminal's wallpaper
+#   ombre setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
+#   ombre borders on|off       follow the look with the window border
+#   ombre pulse on|off         pulse a terminal's border when its agent finishes
+#   ombre shadow on|off        drop shadow under the text (Ghostty windows)
+#   ombre pulse now|stop       start or stop a pulse by hand (with a target)
+#   ombre default none|auto    what new terminals get: nothing, or a different tint each
+#   ombre default from         new terminals copy the focused (or targeted) terminal's look
+#   ombre default theme:nord   new terminals get this look (any look value)
+#   ombre --list               show terminals and their looks
+#   ombre --looks              list the moods, themes and wallpapers
+#   ombre --check              what's installed, and what moods and wallpapers still need
 #
 # Hues: red orange amber green teal blue purple pink
 # Targets (any command): --title TEXT, --pid N, --address HEX, --all
 
 set -euo pipefail
 
-id="ekkostech.terminal-tint"
+id="ekkostech.ombre"
 
 usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -38,10 +38,10 @@ call() {
   local out
   out=$(omarchy-shell shell call "$id" "$1" "$2")
   if [[ $out == unknown ]]; then
-    echo "terminal-tint: plugin not loaded; run: omarchy plugin enable $id" >&2
+    echo "ombre: plugin not loaded; run: omarchy plugin enable $id" >&2
     exit 1
   fi
-  [[ $out == error* ]] && { echo "terminal-tint: $out" >&2; exit 1; }
+  [[ $out == error* ]] && { echo "ombre: $out" >&2; exit 1; }
   return 0
 }
 
@@ -68,12 +68,12 @@ case ${1:-} in
       (if .ghostty then "✓ Ghostty is installed"
        else "✗ Ghostty is not installed, and wallpapers need it. Install with: omarchy install terminal ghostty" end),
       (if .launcher then "✓ Ghostty launcher is set up: new Ghostty windows can take wallpapers"
-       elif .ghostty then "✗ Ghostty launcher is not set up. Run: terminal-tint setup-ghostty"
+       elif .ghostty then "✗ Ghostty launcher is not set up. Run: ombre setup-ghostty"
        else empty end)'
     exit ;;
   setup-ghostty)
     shift
-    exec "$(dirname "$(readlink -f "$0")")/terminal-tint-setup-ghostty" "$@" ;;
+    exec "$(dirname "$(readlink -f "$0")")/ombre-setup-ghostty" "$@" ;;
   wallpaper)
     [[ -n ${2:-} ]] || usage 1
     if [[ $2 == none ]]; then set -- "wallpaper:none" "${@:3}"
