@@ -18,6 +18,8 @@ That's handy when a handful of coding agents are going at once.
 
 ![Four agents, four looks: Tokyo Night with its wallpaper, an Aether mood over the Kanagawa wave, Gruvbox with its wallpaper, and a plain purple tint](preview.jpg)
 
+![Four agent terminals being given their own tints, a wallpaper and a theme, then one pulsing when its agent finishes](demo.gif)
+
 Press a key and a picker shows every terminal with a live preview. Hover a color,
 mood or theme to try it on the real window, click to keep it.
 
