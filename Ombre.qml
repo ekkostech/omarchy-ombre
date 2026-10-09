@@ -64,6 +64,11 @@ Item {
   property var pendingPulses: []
   property string activeAddress: Hyprland.activeToplevel ? Hyprland.activeToplevel.address : ""
   readonly property bool pulsing: Object.keys(pulses).length > 0
+  // Hyprland animates border colour changes itself when its "border"
+  // animation is on; then two updates per cycle are enough. Otherwise the
+  // colour is stepped at 8 fps.
+  property bool borderAnimated: false
+  property bool pulsePhase: false
 
   readonly property string home: Quickshell.env("HOME") || ""
   // State lives in the user's private runtime dir, or under the state dir;
@@ -907,9 +912,14 @@ Item {
 
   function onPulseTick() {
     var now = Date.now()
+    root.pulsePhase = !root.pulsePhase
     for (var addr in root.pulses) {
       var p = root.pulses[addr]
-      var c = Palette.pulseColor(p.color, root.themeBackground, now - p.started)
+      var c
+      if (root.borderAnimated) {
+        var ends = Palette.pulseEnds(p.color, root.themeBackground)
+        c = root.pulsePhase ? ends.bright : ends.dim
+      } else c = Palette.pulseColor(p.color, root.themeBackground, now - p.started)
       Hyprland.dispatch(Palette.borderPair(addr, c, "ff", c, "ff"))
     }
   }
@@ -1144,7 +1154,14 @@ Item {
   Timer { id: previewEnd; interval: 80; onTriggered: root.endPreview() }
   Timer { id: wallpaperPreview; interval: 250; onTriggered: root.onWallpaperPreview() }
   Timer { id: reshowLater; interval: 400; onTriggered: root.onReshow() }
-  Timer { interval: 100; repeat: true; running: root.pulsing; onTriggered: root.onPulseTick() }
+  Timer { interval: root.borderAnimated ? Palette.PULSE_PERIOD_MS / 2 : 125; repeat: true; running: root.pulsing; triggeredOnStart: true; onTriggered: root.onPulseTick() }
+
+  Process {
+    id: animProbe
+    running: true
+    command: ["sh", "-c", "hyprctl animations -j 2>/dev/null | jq -r '.[0][] | select(.name==\"border\") | .enabled' 2>/dev/null"]
+    stdout: StdioCollector { onStreamFinished: root.borderAnimated = String(text).trim() === "true" }
+  }
   Timer { id: restoreAgain; interval: 250; onTriggered: root.onRestoreAgain() }
   // A title change often means an agent just started in some folder.
   Timer { id: projectScan; interval: 10000; onTriggered: root.scan() }

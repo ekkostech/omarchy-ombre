@@ -264,6 +264,12 @@ function agentState(title) {
 // The border color at a moment of the pulse: a slow breath between a dim and a
 // bright version of the accent, about 1.6 seconds per cycle.
 var PULSE_PERIOD_MS = 1600;
+
+// With Hyprland's own border animation on, the pulse only sets its two end
+// colours and the compositor tweens between them on the GPU.
+function pulseEnds(accent, themeBackground) {
+  return { dim: mix(themeBackground, accent, 0.3), bright: mix(accent, isLight(themeBackground) ? "#000000" : "#ffffff", 0.35) };
+}
 function pulseColor(accent, themeBackground, elapsedMs) {
   var t = 0.5 - 0.5 * Math.cos(2 * Math.PI * (elapsedMs % PULSE_PERIOD_MS) / PULSE_PERIOD_MS);
   var dim = mix(themeBackground, accent, 0.3);

@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.3.2 — 2026-10-09
+- The pulse lets Hyprland tween the border colour on the GPU: two updates per cycle instead of sixteen when Hyprland's `border` animation is on, with the old stepping as a fallback.
+
 ## 1.3.1 — 2026-10-09
 - Security: per-window Ghostty config files and Ombre's state never fall back to `/tmp`. Without `XDG_RUNTIME_DIR` they go under `~/.local/state/ombre`, created `0700`; the launcher and the writer verify the directory is owned by the user and not a symlink, and otherwise run Ghostty without a per-window config. Reported by the Omarchy marketplace review.
 
