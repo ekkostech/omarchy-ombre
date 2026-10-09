@@ -1,4 +1,4 @@
-// Run with: node --test tests/
+// Run with: node --test tests/*.test.js
 // Palette.js is a QML .pragma library file; it is loaded here as plain JS.
 const test = require("node:test");
 const assert = require("node:assert/strict");

@@ -193,7 +193,7 @@ clean. The border setting is saved in `~/.config/omarchy/ombre.json`.
 ## Development
 
 ```bash
-node --test tests/          # unit tests for the colour and parsing logic
+node --test tests/*.test.js # unit tests for the colour and parsing logic
 omarchy plugin validate .   # manifest check
 ```
 
