@@ -104,12 +104,20 @@ function copyPalette(p) {
   };
 }
 
-// Aether palettes are the 16 ANSI colors: 0 is the background, 7 the text.
+// Aether palettes are the 16 ANSI colors: 0 is the background, 7 the text. Aether
+// keeps every mood's background near black (fire #0c0000, ocean #000312...), so on a
+// dark theme the moods were telling each other apart only by their ANSI colors. The
+// window background and text take a share of the mood's accent, the way a tint
+// takes a hue, so Fire reads warm and Ocean blue in plain text too. ANSI color 0 stays.
+var MOOD_BACKGROUND = 0.2;
+var MOOD_FOREGROUND = 0.15;
 function aetherPalette(colors) {
   if (!Array.isArray(colors) || colors.length < 16) return null;
   var c = colors.slice(0, 16).map(function (x) { return String(x).toLowerCase(); });
   for (var i = 0; i < 16; i++) if (!isHex(c[i])) return null;
-  return { background: c[0], foreground: c[7], cursor: c[15], accent: mostChromatic(c.slice(1, 7)), colors: c };
+  var accent = mostChromatic(c.slice(1, 7));
+  return { background: mix(c[0], accent, MOOD_BACKGROUND), foreground: mix(c[7], accent, MOOD_FOREGROUND),
+    cursor: c[15], accent: accent, colors: c };
 }
 
 function parseToml(text) {

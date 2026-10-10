@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.1 — 2026-10-10
+- Moods look like moods again on dark themes. Aether keeps every mood's background near black, so on a black Omarchy theme Fire, Ocean and Forest looked the same in plain text. A mood's window background now takes 20% of its accent colour and its text 15%, the way a tint takes a hue: Fire reads warm, Ocean blue, Vaporwave magenta. The ANSI colours are unchanged.
+
 ## 1.4.0 — 2026-10-10
 - Solid Ghostty windows, on by default: Omarchy's window rule makes every window slightly transparent (0.985 focused, 0.96 not), which let the desktop wallpaper bleed through a terminal's own wallpaper. Ombre now sets Ghostty windows fully opaque, including new ones. `O` in the picker, the "Solid Ghostty" toggle or `ombre solid off` hands them back; each window returns to the exact opacity it had before.
 

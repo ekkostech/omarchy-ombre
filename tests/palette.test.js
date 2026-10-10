@@ -11,7 +11,7 @@ const P = {};
 vm.runInNewContext(src + "\n" + [
   "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
   "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper",
-  "agentState", "pulseColor", "borderCommand", "opacityPair", "isImagePath", "themePalette", "parseToml"
+  "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "isImagePath", "themePalette", "parseToml"
 ].map((n) => `P.${n} = ${n};`).join("\n"), { P, JSON, Math });
 
 test("tints mix into the theme background and stay dark on dark themes", () => {
@@ -99,4 +99,18 @@ test("opacityPair sets both opacities in one call and clamps values", () => {
   assert.match(back, /prop = "opacity_inactive", value = 0\.96/);
   assert.match(P.opacityPair("5a1b", 7, -2), /value = 1,.*value = 0,/);
   assert.match(P.opacityPair("5a1b", "x", NaN), /value = 1,.*value = 1,/);
+});
+
+test("a mood's background and text carry its accent so moods differ on black themes", () => {
+  const fire = P.aetherPalette(["#0c0000", "#bd615b", "#928b58", "#aa9b69", "#8c66b2", "#b3608e", "#a27bc8", "#f4d8c5", "#68605f", "#eb8279", "#b7b16d", "#d1c27f", "#b485e6", "#e07fb9", "#cb9bfd", "#ffdfb4"]);
+  const ocean = P.aetherPalette(["#000312", "#b75da6", "#4a9a7f", "#8c9a5a", "#5388dd", "#9b6fc9", "#4fa3c0", "#c4e5e9", "#5a6470", "#d47ac0", "#60b898", "#a8b870", "#6fa0f0", "#b58ae0", "#66c0dc", "#dff4f6"]);
+  assert.equal(fire.accent, "#bd615b");
+  assert.equal(fire.colors[0], "#0c0000");
+  assert.notEqual(fire.background, "#0c0000");
+  assert.notEqual(fire.background, ocean.background);
+  const [fr, fg, fb] = [1, 3, 5].map((i) => parseInt(fire.background.slice(i, i + 2), 16));
+  assert.ok(fr > fb && fr > fg, "fire is warm: " + fire.background);
+  const [or, og, ob] = [1, 3, 5].map((i) => parseInt(ocean.background.slice(i, i + 2), 16));
+  assert.ok(ob > or, "ocean is blue: " + ocean.background);
+  assert.ok(P.isLight(fire.foreground) && !P.isLight(fire.background));
 });
