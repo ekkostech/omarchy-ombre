@@ -1050,7 +1050,7 @@ Item {
         }
       }
     } catch (e) { }
-    if (!root.configLoaded) {
+    if (!root.configLoaded && root.themeBorders.active) {
       root.repaintAll = true
       root.reapply()
     }
@@ -1248,7 +1248,11 @@ Item {
       onStreamFinished: {
         var halves = String(text).split("@@")
         var active = Palette.themeGradient(halves[0]), inactive = Palette.themeGradient(halves[1] || "")
-        if (active || inactive) root.themeBorders = { active: active, inactive: inactive }
+        if (!active && !inactive) return
+        var changed = active !== root.themeBorders.active || inactive !== root.themeBorders.inactive
+        root.themeBorders = { active: active, inactive: inactive }
+        // Windows painted before the theme was known (or under the old theme) get it now.
+        if (changed && root.configLoaded) { root.repaintAll = true; root.reapply() }
       }
     }
   }
