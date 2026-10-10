@@ -27,18 +27,25 @@
 #   ombre default none|auto    what new terminals get: nothing, or a different tint each
 #   ombre default from         new terminals copy the focused (or targeted) terminal's look
 #   ombre default theme:nord   new terminals get this look (any look value)
+#   ombre save "Deep Ocean"       save the focused terminal's complete look
+#   ombre look "Deep Ocean"       apply a saved look (targets work here too)
+#   ombre --saved                 list saved looks and favourites
+#   ombre saved favorite NAME     toggle a saved look's favourite star
+#   ombre saved rename OLD NEW    rename a saved look
+#   ombre saved remove NAME       remove a saved look
+#   ombre undo | ombre redo       restore the targeted terminal's previous look
 #   ombre --list               show terminals and their looks
 #   ombre --looks              list the moods, themes and wallpapers
 #   ombre --check              what's installed, and what moods and wallpapers still need
 #
 # Hues: red orange amber green teal blue purple pink
-# Targets (any command): --title TEXT, --pid N, --address HEX, --all
+# Targets (styling/save/history): --title TEXT, --workspace NAME, --pid N, --address HEX, --all
 
 set -euo pipefail
 
 id="ekkostech.ombre"
 
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} /^$/ {print; next} {exit}' "$0"; exit "${1:-0}"; }
 
 call() {
   local out
@@ -63,7 +70,7 @@ case ${1:-} in
     exit ;;
   --looks)
     omarchy-shell shell call "$id" looks "" |
-      jq -r '"moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" ")), "wallpapers:", (.wallpapers[] | "  " + .)'
+      jq -r '"saved:  " + ([.saved[].name] | join(", ")), "moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" ")), "wallpapers:", (.wallpapers[] | "  " + .)'
     exit ;;
   --check)
     call looks "" # the first call refreshes what's installed
@@ -77,6 +84,21 @@ case ${1:-} in
       (if .launcher then "✓ Ghostty launcher is set up: new Ghostty windows can take wallpapers"
        elif .ghostty then "✗ Ghostty launcher is not set up. Run: ombre setup-ghostty"
        else empty end)'
+    exit ;;
+  --saved)
+    omarchy-shell shell call "$id" looks "" | jq -r '.saved[] | "\(if .favorite then "★" else "☆" end) \(.name)"'; exit ;;
+  save|look)
+    [[ -n ${2:-} ]] || usage 1
+    if [[ $1 == save ]]; then set -- "save:$2" "${@:3}"
+    else set -- "saved:$2" "${@:3}"; fi ;;
+  saved)
+    case ${2:-} in
+      list) omarchy-shell shell call "$id" looks "" | jq -r '.saved[] | "\(if .favorite then "★" else "☆" end) \(.name)"' ;;
+      favorite|favourite) [[ -n ${3:-} ]] || usage 1; call favoriteNamedLook "$3" ;;
+      remove) [[ -n ${3:-} ]] || usage 1; call removeNamedLook "$3" ;;
+      rename) [[ -n ${3:-} && -n ${4:-} ]] || usage 1; call renameSaved "$(jq -cn --arg from "$3" --arg to "$4" '{from:$from,to:$to}')" ;;
+      *) usage 1 ;;
+    esac
     exit ;;
   setup-ghostty)
     shift
@@ -131,6 +153,7 @@ while (($#)); do
   case $1 in
     --strength) strength="${2:?--strength needs a number from 0.01 to 1 (soft is 0.08)}"; shift 2 ;;
     --title) target="title:${2:?--title needs text}"; shift 2 ;;
+    --workspace) target="workspace:${2:?--workspace needs a workspace name or number}"; shift 2 ;;
     --pid) target="pid:${2:?--pid needs a number}"; shift 2 ;;
     --address) target="address:${2:?--address needs a window address}"; shift 2 ;;
     --all) target=all; shift ;;

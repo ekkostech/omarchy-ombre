@@ -590,6 +590,7 @@ function match(list, target) {
     var hit = t === "all" ? true
       : t === "focused" ? term.focused
       : t.indexOf("title:") === 0 ? term.title.toLowerCase().indexOf(t.slice(6).toLowerCase()) >= 0
+      : t.indexOf("workspace:") === 0 ? String(term.workspace) === t.slice(10)
       : t.indexOf("pid:") === 0 ? term.pid === t.slice(4)
       : t.indexOf("address:") === 0 ? term.address === t.slice(8).replace(/^0x/, "")
       : false;

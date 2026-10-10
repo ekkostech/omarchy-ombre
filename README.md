@@ -16,9 +16,11 @@ That's handy when a handful of coding agents are going at once.
 > (`omarchy install terminal ghostty`) and a one-time setup from the picker.
 > The plugin says so in a notification the first time it loads.
 
-![The actual Ombre picker with live terminal previews, independent text and background controls, and Aether mood palettes](preview.png)
+![The actual Ombre 1.5 picker with saved looks, favourites, terminal search, batch selection and undo controls](preview.png)
 
-*The real Ombre picker, captured with four demo terminals. Select a terminal, preview a mood, and apply text colors and backgrounds together or separately.*
+*The real Ombre 1.5 picker, captured with four demo terminals and saved favourites. Search, select several cards, and reuse a complete look.*
+
+![The Ombre 1.5 Moods tab with independent text and background controls and quick-access favourites](assets/screenshots/picker-moods-1.5.png)
 
 ![Four agents, four looks: Tokyo Night with its wallpaper, an Aether mood over the Kanagawa wave, Gruvbox with its wallpaper, and a plain purple tint](preview.jpg)
 
@@ -28,6 +30,11 @@ Press a key and a picker shows every terminal with a live preview. Hover a color
 mood or theme to try it on the real window, click to keep it.
 
 ## Features
+
+- **Saved looks and favourites**: save a named combination of text colours, background, wallpaper and strength. Star favourites for the quick-access strip; update, rename or remove them in Saved looks.
+- **Undo and redo per terminal**: restore a previous complete look with `Ctrl+Z`, redo with `Ctrl+Shift+Z` or `Ctrl+Y`. A palette plus wallpaper change is one step. Hover previews and automatic rules do not add history.
+- **Batch styling**: Ctrl-click cards or use their `+` buttons to select several terminals. Select visible cards or the current workspace, then apply colours, moods, themes, saved looks or wallpapers together.
+- **Terminal search**: search titles, project paths or workspaces with `Ctrl+F` or `/`, and filter to the workspace where you opened Ombre. Keyboard navigation follows matching cards.
 
 - **Live previews**: every terminal appears as a live thumbnail, on any workspace.
 - **See which window you're picking**: the desktop dims around the selected terminal and outlines it with its name, on whichever monitor it's on. A terminal on another workspace is marked as not on screen.
@@ -90,7 +97,14 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 | `0` / `Backspace` | Back to the terminal's own colors |
 | `N` | Next tint |
 | `Space` / `Shift+Space` | Next / previous mood, theme or wallpaper |
-| `Tab` | Switch between Moods, Themes, Wallpapers and New terminals |
+| `Ctrl+F` / `/` | Focus terminal search |
+| `Ctrl+click` / card `+` | Add or remove a terminal from the batch selection |
+| `Ctrl+Space` | Toggle the active card in the batch selection |
+| `Ctrl+A` | Select all visible matching terminals |
+| `Ctrl+S` | Open Saved looks and name the active terminal’s look |
+| `Ctrl+Z` | Undo the active terminal’s last change |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo the active terminal’s last change |
+| `Tab` | Switch between Saved looks, Moods, Themes, Wallpapers and Projects & new terminals |
 | `W` / `Shift+W` | Next / previous wallpaper to make moods from |
 | `X` | Hide that wallpaper from the strips (right-click does too; files are untouched) |
 | `H` | Show / hide the hidden ones |
@@ -106,13 +120,34 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 The terminal you were in is selected when the picker opens. Everything works
 from the keyboard alone; the mouse is optional. The tint dots sit on each
 terminal's card and act on that card's terminal; moods, themes and wallpapers
-apply to the selected terminal. On a Ghostty window, **with its wallpaper** (next to the tabs) makes a
+apply to the selected targets. On a Ghostty window, **with its wallpaper** (next to the tabs) makes a
 mood or theme bring its wallpaper along.
 
 Moods need Aether 4 or newer. Without it, the Moods tab says how to get it, and
 tints, themes and wallpapers still work.
 
+## Saved looks, history and selection
+
+Save the **active** card’s exact combination in Saved looks. Names are case-insensitive and can contain spaces (up to 64 characters). Star a saved look to put it in the favourites strip. **Update** replaces it with the active card’s current combination; **Rename** preserves the look. Deleting requires a second confirmation click. Saved looks apply the chosen layer scope; a complete preset also restores its saved wallpaper and strength, including no wallpaper.
+
+A plain card click returns to single-terminal styling. Ctrl-click or the card’s `+` button builds a batch selection. **Select visible** uses the current search and workspace filter; **Select workspace** selects matching cards on the workspace where the picker opened. Changing a filter clears the batch selection. Hidden cards are never batch targets. Hover previews and undo/redo affect only the active card. When a mixed batch contains terminals without wallpaper support, their colours still apply and Ombre reports how many wallpaper changes were skipped.
+
+Undo history keeps up to 50 changes per terminal for the current shell session. Closing a terminal or restarting the shell clears its history; a reused process or pty never inherits it. Saved looks and favourites survive shell restarts in `~/.config/omarchy/ombre.json`, alongside existing settings and project rules. The library holds up to 200 named looks. Wallpapers are referenced by their local file paths.
+
 ## Scripting
+
+```bash
+ombre save "Deep Ocean"                 # capture the focused terminal
+ombre look "Deep Ocean" --workspace 2   # apply a saved combination to a workspace
+ombre look "Deep Ocean" --title Claude  # target matching agent terminals
+ombre --saved                          # list saved looks and favourites
+ombre saved favorite "Deep Ocean"      # toggle its star
+ombre saved rename "Deep Ocean" "Ocean"
+ombre undo --title Claude              # each matching terminal restores its own prior state
+ombre redo                             # redo the focused terminal
+```
+
+Saved looks restore the complete combination through the CLI, independent of the picker’s layer scope. Existing `--all`, `--title`, `--pid` and `--address` targets remain available; `--workspace` matches an exact workspace name or number.
 
 `bin/ombre` wraps the plugin's IPC. To use it, link it onto your `PATH`:
 

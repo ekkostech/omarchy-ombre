@@ -6,6 +6,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "Palette.js" as Palette
+import "Workspace.js" as Workspace
 
 // Ombre: give any running terminal window its own look: a background
 // tint, an Aether mood generated from a wallpaper, or a whole Omarchy theme,
@@ -28,6 +29,25 @@ Item {
   property string previewPty: ""
   property var previewLook: null
   property string applyScope: "all"
+  property var savedLooks: []
+  property bool favoritesOnly: false
+  property string libraryMessage: ""
+  property string editingSavedName: ""
+  property string pendingDeleteName: ""
+  property var histories: ({})
+  property bool historyMuted: false
+  property string searchText: ""
+  property bool workspaceOnly: false
+  property string openingWorkspace: ""
+  property var markedKeys: []
+  readonly property var filteredTerminals: Workspace.filtered(terminals, searchText, workspaceOnly ? openingWorkspace : "")
+  readonly property var sortedLooks: Workspace.sorted(savedLooks, favoritesOnly)
+  readonly property var favoriteLooks: Workspace.sorted(savedLooks, true)
+  readonly property var actionTargets: Workspace.targets(terminals, filteredTerminals, markedKeys, current)
+  readonly property bool targetTakesWallpaper: actionTargets.some(function (i) { return terminals[i].wallpaperReady })
+  readonly property var selectedHistory: selectedTerm ? histories[Workspace.key(selectedTerm)] || {past: [], future: []} : ({past: [], future: []})
+  onSearchTextChanged: resetFilterSelection()
+  onWorkspaceOnlyChanged: resetFilterSelection()
   property string previewWallpaperPty: ""
   property bool focusOnScan: false
   property bool rescan: false
@@ -107,12 +127,13 @@ Item {
   readonly property int gap: Style.space(12)
   readonly property int swatchSize: Style.space(18)
   readonly property int cardWidth: Style.space(264)
-  readonly property int columns: Math.max(1, Math.min(terminals.length, 4))
-  readonly property int contentWidth: Math.max(columns * cardWidth + (columns - 1) * gap, Style.space(820))
+  readonly property int columns: Math.max(1, Math.min(filteredTerminals.length, 4))
+  readonly property int layoutColumns: Math.max(1, Math.min(terminals.length, 4))
+  readonly property int contentWidth: Math.max(layoutColumns * cardWidth + (layoutColumns - 1) * gap, Style.space(820))
 
   readonly property var selectedTerm: current >= 0 && current < terminals.length ? terminals[current] : null
   readonly property bool selectedTakesWallpaper: selectedTerm !== null && selectedTerm.wallpaperReady
-  readonly property var tabs: ["moods", "themes", "wallpapers", "default"]
+  readonly property var tabs: ["saved", "moods", "themes", "wallpapers", "default"]
 
   // What a newly opened terminal gets: none, auto (the least-used tint), or a
   // saved look with an optional wallpaper. Terminals already open when the
@@ -174,6 +195,8 @@ Item {
 
   // ---- Shell lifecycle --------------------------------------------------
   function open(payloadJson) {
+    root.openingWorkspace = Hyprland.focusedWorkspace ? String(Hyprland.focusedWorkspace.name || Hyprland.focusedWorkspace.id) : ""
+    root.markedKeys = []
     root.opened = true
     root.focusOnScan = true
     root.hoverText = ""
@@ -226,6 +249,9 @@ Item {
       opened: root.opened,
       current: root.current,
       borders: root.borders,
+      version: root.pluginVersion,
+      selectedCount: root.actionTargets.length,
+      filteredCount: root.filteredTerminals.length,
       terminals: root.terminals.map(function (t) {
         return { pty: t.pty, pid: t.pid, address: "0x" + t.address, workspace: t.workspace,
                  title: t.title, kind: t.look ? t.look.kind : "", look: Palette.lookLabel(t.look),
@@ -239,6 +265,7 @@ Item {
   function looks(arg) {
     root.loadCatalog()
     return JSON.stringify({
+      saved: root.savedLooks.map(function (v) { return {name: v.name, favorite: v.favorite} }),
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
       wallpapers: root.wallpaperChoices,
@@ -371,7 +398,8 @@ Item {
   }
 
   function validSpec(v) {
-    return v === "next" || v === "reset" || Palette.tintLook(v) !== null || /^text:#[0-9a-fA-F]{6}$/.test(v)
+    return v === "undo" || v === "redo" || ((v.indexOf("saved:") === 0 || v.indexOf("save:") === 0) && Workspace.name(v.slice(v.indexOf(":") + 1)) !== "")
+      || v === "next" || v === "reset" || Palette.tintLook(v) !== null || /^text:#[0-9a-fA-F]{6}$/.test(v)
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
       || v === "pulse:now" || v === "pulse:stop"
@@ -383,6 +411,11 @@ Item {
   // A look for a spec, { wait: true } while its data loads, or { error }.
   function resolveSpec(spec) {
     if (spec === "reset") return { look: null }
+    if (spec.indexOf("saved:") === 0) {
+      if (!root.configLoaded) return { wait: true }
+      var saved = Workspace.find(root.savedLooks, spec.slice(6))
+      return saved >= 0 ? Workspace.snapshot(root.savedLooks[saved]) : { error: "no saved look " + spec.slice(6) }
+    }
     var tint = Palette.tintLook(spec)
     if (tint) return { look: tint }
     if (!root.catalogLoaded) { root.loadCatalog(); return { wait: true } }
@@ -411,6 +444,22 @@ Item {
     for (var i = 0; i < root.requests.length; i++) {
       var req = root.requests[i]
       var hits = Palette.match(list, req.target)
+      if (req.value === "undo" || req.value === "redo") {
+        for (var hi = 0; hi < hits.length; hi++) root.travelHistory(root.indexOf(hits[hi].pty), req.value)
+        continue
+      }
+      if (req.value.indexOf("save:") === 0) {
+        if (!root.configLoaded) { waiting.push(req); continue }
+        if (hits.length) root.saveNamedLook(req.value.slice(5), hits[0])
+        continue
+      }
+      if (req.value.indexOf("saved:") === 0) {
+        if (!root.configLoaded) { waiting.push(req); continue }
+        var savedIndex = Workspace.find(root.savedLooks, req.value.slice(6))
+        if (savedIndex < 0) { console.warn("ombre: no saved look", req.value.slice(6)); continue }
+        for (var si = 0; si < hits.length; si++) root.applySaved(root.indexOf(hits[si].pty), root.savedLooks[savedIndex], "all")
+        continue
+      }
       if (req.value === "next") {
         for (var j = 0; j < hits.length; j++)
           root.commit(root.indexOf(hits[j].pty), Palette.tintLook(root.nextHue(hits[j].look)))
@@ -429,7 +478,7 @@ Item {
         var d = root.resolveSpec(req.value.slice(8))
         if (d.wait) { waiting.push(req); continue }
         if (d.error) { console.warn("ombre:", d.error); continue }
-        root.setDefaultLook(d.look, null)
+        root.setDefaultLook(d.look, d.wallpaper || null)
         continue
       }
       if (req.value === "pulse:now" || req.value === "pulse:stop") {
@@ -463,6 +512,182 @@ Item {
     root.requests = waiting
   }
 
+  // ---- Saved looks, per-terminal history and picker targeting ------------
+  function ensureVisibleCurrent() {
+    var visible = Workspace.filtered(root.terminals, root.searchText, root.workspaceOnly ? root.openingWorkspace : "")
+    if (!visible.length) { root.current = -1; return }
+    for (var i = 0; i < visible.length; i++) if (visible[i].sourceIndex === root.current) return
+    root.current = visible[0].sourceIndex
+  }
+  function resetFilterSelection() {
+    root.endPreview()
+    root.markedKeys = []
+    root.ensureVisibleCurrent()
+  }
+  function moveCurrent(delta, wrap) {
+    var visible = root.filteredTerminals
+    if (!visible.length) return
+    var at = 0
+    for (var i = 0; i < visible.length; i++) if (visible[i].sourceIndex === root.current) at = i
+    at = wrap ? (at + delta + visible.length) % visible.length : Math.max(0, Math.min(visible.length - 1, at + delta))
+    root.current = visible[at].sourceIndex
+  }
+  function selectCard(index, multiple) {
+    root.endPreview()
+    root.current = index
+    if (multiple) root.toggleMarked(index)
+    else root.markedKeys = []
+  }
+  function toggleMarked(index) {
+    if (index < 0 || index >= root.terminals.length) return
+    root.endPreview()
+    root.current = index
+    var key = Workspace.key(root.terminals[index]), next = root.markedKeys.slice(), at = next.indexOf(key)
+    if (at >= 0) next.splice(at, 1)
+    else next.push(key)
+    root.markedKeys = next
+  }
+  function selectVisible(onlyWorkspace) {
+    root.endPreview()
+    root.markedKeys = root.filteredTerminals.filter(function (t) {
+      return !onlyWorkspace || t.workspace === root.openingWorkspace
+    }).map(Workspace.key)
+  }
+  function recordChange(index, before) {
+    if (!root.historyMuted && root.terminals[index]) root.histories = Workspace.record(root.histories, root.terminals[index], before)
+  }
+  function restoreSnapshot(index, state) {
+    if (index < 0 || index >= root.terminals.length) return
+    var muted = root.historyMuted
+    root.historyMuted = true
+    root.commit(index, state.look, true)
+    if (root.terminals[index].wallpaperReady) root.setWallpaper(index, state.wallpaper)
+    root.historyMuted = muted
+  }
+  function travelHistory(index, direction) {
+    if (index < 0 || index >= root.terminals.length) return
+    root.endPreview()
+    var result = Workspace.travel(root.histories, root.terminals[index], direction)
+    if (!result) return
+    root.histories = result.histories
+    root.restoreSnapshot(index, result.state)
+  }
+  function applyLookTargets(look) {
+    root.endPreview()
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) root.commitWithWallpaper(targets[i], look)
+  }
+  function applyTintTargets(value) {
+    root.endPreview()
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) root.commit(targets[i], Palette.layerLook(root.terminals[targets[i]].look, Palette.tintLook(value), "background"))
+  }
+  function applyCardTint(index, value) {
+    if (root.markedKeys.indexOf(Workspace.key(root.terminals[index])) < 0) root.markedKeys = []
+    root.current = index
+    root.applyTintTargets(value)
+  }
+  function resetTargets() {
+    root.endPreview()
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) root.commit(targets[i], null)
+  }
+  function applyWallpaperTargets(wallpaper) {
+    root.endPreview()
+    var targets = root.actionTargets.slice(), skipped = 0
+    for (var i = 0; i < targets.length; i++) {
+      if (root.terminals[targets[i]].wallpaperReady) root.setWallpaper(targets[i], wallpaper)
+      else skipped++
+    }
+    if (skipped) root.hoverText = "Wallpaper applied to " + (targets.length - skipped) + " terminals; " + skipped + " cannot display wallpapers."
+  }
+  function saveNamedLook(value, term, replace) {
+    var name = Workspace.name(value)
+    if (!name) { root.libraryMessage = "Use a name of 1–64 characters."; return false }
+    term = term || root.selectedTerm
+    if (!term) { root.libraryMessage = "Select a terminal to save."; return false }
+    var at = Workspace.find(root.savedLooks, name)
+    if (at >= 0 && !replace) { root.libraryMessage = "That name is already saved. Use Update on its card to replace it."; return false }
+    if (at < 0 && root.savedLooks.length >= 200) { root.libraryMessage = "The library holds up to 200 looks. Remove one before saving another."; return false }
+    var state = Workspace.snapshot(term), next = root.savedLooks.slice()
+    var item = {name: at >= 0 ? next[at].name : name, look: state.look, wallpaper: state.wallpaper, favorite: at >= 0 && next[at].favorite}
+    if (at >= 0) next[at] = item
+    else next.push(item)
+    root.savedLooks = next
+    root.libraryMessage = "Saved " + item.name + "."
+    root.saveConfig()
+    return true
+  }
+  function renameSaved(arg) {
+    try {
+      var request = JSON.parse(arg)
+      return root.renameNamedLook(request.from, request.to) ? "ok" : "error: " + root.libraryMessage
+    } catch (e) { return "error: invalid rename request" }
+  }
+  function favoriteNamedLook(value) {
+    var at = Workspace.find(root.savedLooks, value)
+    if (at < 0) return "error: no saved look " + value
+    var next = root.savedLooks.slice()
+    next[at] = Object.assign({}, next[at], {favorite: !next[at].favorite})
+    root.savedLooks = next
+    root.saveConfig()
+    return "ok"
+  }
+  function removeNamedLook(value) {
+    var at = Workspace.find(root.savedLooks, value)
+    if (at < 0) return "error: no saved look " + value
+    var next = root.savedLooks.slice()
+    next.splice(at, 1)
+    root.savedLooks = next
+    root.pendingDeleteName = ""
+    root.libraryMessage = "Removed " + value + "."
+    root.saveConfig()
+    return "ok"
+  }
+  function renameNamedLook(oldName, newName) {
+    var at = Workspace.find(root.savedLooks, oldName), name = Workspace.name(newName), conflict = Workspace.find(root.savedLooks, name)
+    if (at < 0 || !name || (conflict >= 0 && conflict !== at)) {
+      root.libraryMessage = "Choose an unused name of 1–64 characters."
+      return false
+    }
+    var next = root.savedLooks.slice()
+    next[at] = Object.assign({}, next[at], {name: name})
+    root.savedLooks = next
+    root.editingSavedName = ""
+    root.libraryMessage = "Renamed to " + name + "."
+    root.saveConfig()
+    return true
+  }
+  function savedChipLook(saved) {
+    var textLook = Palette.textLook(saved.look)
+    return {palette: {background: Palette.lookBackground(saved.look, root.themeBackground) || root.themeBackground,
+      foreground: Palette.lookForeground(saved.look) || String(root.text), colors: textLook ? textLook.palette.colors : []}}
+  }
+  function submitSavedName(value) {
+    var ok = root.editingSavedName ? root.renameNamedLook(root.editingSavedName, value) : root.saveNamedLook(value)
+    if (ok) { savedName.text = ""; keyCatcher.forceActiveFocus() }
+  }
+  function applySaved(index, saved, scope) {
+    if (index < 0 || index >= root.terminals.length) return
+    var before = Workspace.snapshot(root.terminals[index]), muted = root.historyMuted
+    root.historyMuted = true
+    root.commit(index, scope === "all" ? saved.look : Palette.layerLook(root.terminals[index].look, saved.look, scope), true)
+    if (scope !== "text" && root.terminals[index].wallpaperReady) root.setWallpaper(index, saved.wallpaper)
+    root.historyMuted = muted
+    root.recordChange(index, before)
+  }
+  function applySavedTargets(saved) {
+    root.endPreview()
+    var targets = root.actionTargets.slice(), skipped = 0
+    for (var i = 0; i < targets.length; i++) {
+      if (root.applyScope !== "text" && saved.wallpaper && !root.terminals[targets[i]].wallpaperReady) skipped++
+      root.applySaved(targets[i], saved, root.applyScope)
+    }
+    root.libraryMessage = "Applied " + saved.name + " to " + targets.length + (targets.length === 1 ? " terminal." : " terminals.")
+      + (skipped ? " " + skipped + " cannot display wallpapers; their colors were applied." : "")
+    root.hoverText = root.libraryMessage
+  }
+
   // ---- Scanning ---------------------------------------------------------
   function scan() {
     if (scanner.running) { root.rescan = true; return }
@@ -493,7 +718,11 @@ Item {
   function onScan(output) {
     var list = root.parseScan(output)
     if (!list) return
+    var previous = Workspace.key(root.selectedTerm)
     root.terminals = list
+    root.histories = Workspace.prune(root.histories, list)
+    root.markedKeys = root.markedKeys.filter(function (k) { return list.some(function (t) { return Workspace.key(t) === k }) })
+    for (var pi = 0; pi < list.length; pi++) if (Workspace.key(list[pi]) === previous) root.current = pi
     if (root.focusOnScan) {
       root.focusOnScan = false
       root.current = Palette.focusedIndex(list)
@@ -504,8 +733,12 @@ Item {
     for (var w = 0; w < waiting.length; w++) {
       for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w]) root.startPulse(list[t])
     }
+    var muted = root.historyMuted
+    root.historyMuted = true
     root.applyProjects(list)
     root.applyDefaults(list)
+    root.historyMuted = muted
+    root.ensureVisibleCurrent()
     root.applySolid()
     if (root.reshadowAll) {
       root.reshadowAll = false
@@ -637,16 +870,18 @@ Item {
     return next[index]
   }
 
-  function commit(index, look) {
+  function commit(index, look, exact) {
     if (index < 0 || index >= root.terminals.length) return
+    var before = Workspace.snapshot(root.terminals[index])
     // A background swatch must never discard the selected text palette.
-    if (look && look.kind === "tint") look = Palette.layerLook(root.terminals[index].look, look, "background")
+    if (!exact && look && look.kind === "tint") look = Palette.layerLook(root.terminals[index].look, look, "background")
     look = Palette.normalizeLook(look)
     if (root.previewPty === root.terminals[index].pty) root.previewPty = ""
     var term = root.update(index, { look: look })
     root.show(term, look)
     root.persist(term)
     if (term.wallpaperReady) root.sendWallpaper(term, term.wallpaper)
+    root.recordChange(index, before)
     if (root.pulses[term.address]) {
       var pulses = Object.assign({}, root.pulses)
       pulses[term.address] = Object.assign({}, pulses[term.address],
@@ -663,25 +898,33 @@ Item {
   function setLayerColor(layer, value) {
     if (!root.selectedTerm || (value && !Palette.isHex(value))) return
     root.endPreview()
-    var look = root.selectedTerm.look
-    root.commit(root.current, layer === "text" ? Palette.foregroundLook(look, value)
-      : Palette.layerLook(look, Palette.tintLook(value), "background"))
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) {
+      var index = targets[i], currentLook = root.terminals[index].look
+      root.commit(index, layer === "text" ? Palette.foregroundLook(currentLook, value)
+        : Palette.layerLook(currentLook, Palette.tintLook(value), "background"))
+    }
   }
 
   function resetLayer(layer) {
     if (!root.selectedTerm) return
     root.endPreview()
-    root.commit(root.current, Palette.layerLook(root.selectedTerm.look, null, layer))
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) root.commit(targets[i], Palette.layerLook(root.terminals[targets[i]].look, null, layer))
   }
 
   // A mood or theme, with its wallpaper too when the window can take one.
   function commitWithWallpaper(index, look) {
     if (index < 0 || index >= root.terminals.length) return
+    var before = Workspace.snapshot(root.terminals[index]), muted = root.historyMuted
+    root.historyMuted = true
     root.commit(index, Palette.layerLook(root.terminals[index].look, look, root.applyScope))
     var term = root.terminals[index]
     var image = look ? (look.kind === "mood" ? look.source : look.image) : ""
     if (root.applyScope !== "text" && root.withWallpaper && term && term.wallpaperReady && Palette.isImagePath(image))
       root.setWallpaper(index, { path: image, strength: root.strength })
+    root.historyMuted = muted
+    root.recordChange(index, before)
   }
 
   // Ghostty reloads the window's config file on SIGUSR2. The writer checks the
@@ -697,11 +940,13 @@ Item {
 
   function setWallpaper(index, wallpaper) {
     if (index < 0 || index >= root.terminals.length || !root.terminals[index].wallpaperReady) return
+    var before = Workspace.snapshot(root.terminals[index])
     var w = Palette.normalizeWallpaper(wallpaper)
     if (root.previewWallpaperPty === root.terminals[index].pty) root.previewWallpaperPty = ""
     var term = root.update(index, { wallpaper: w })
     root.sendWallpaper(term, w)
     root.persist(term)
+    root.recordChange(index, before)
   }
 
   function preview(index, look, scope) {
@@ -763,8 +1008,11 @@ Item {
   function setStrength(value) {
     root.strength = value
     root.saveConfig()
-    var term = root.selectedTerm
-    if (term && term.wallpaper) root.setWallpaper(root.current, { path: term.wallpaper.path, strength: value })
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) {
+      var term = root.terminals[targets[i]]
+      if (term.wallpaper) root.setWallpaper(targets[i], { path: term.wallpaper.path, strength: value })
+    }
   }
 
   // ---- Project rules --------------------------------------------------------
@@ -934,12 +1182,20 @@ Item {
   function stepLook(delta) {
     var term = root.selectedTerm
     if (!term) return
+    if (root.tab === "saved") {
+      if (!root.sortedLooks.length) return
+      var savedIndex = -1
+      for (var s = 0; s < root.sortedLooks.length; s++) if (Workspace.same(term, root.sortedLooks[s])) savedIndex = s
+      var sn = savedIndex < 0 ? (delta > 0 ? 0 : root.sortedLooks.length - 1) : (savedIndex + delta + root.sortedLooks.length) % root.sortedLooks.length
+      root.applySavedTargets(root.sortedLooks[sn])
+      return
+    }
     if (root.tab === "wallpapers") {
-      if (!term.wallpaperReady || root.wallpaperChoices.length === 0) return
+      if (!root.targetTakesWallpaper || root.wallpaperChoices.length === 0) return
       var choices = root.wallpaperChoices
       var w = term.wallpaper ? choices.indexOf(term.wallpaper.path) : -1
       var wn = w < 0 ? (delta > 0 ? 0 : choices.length - 1) : (w + delta + choices.length) % choices.length
-      root.setWallpaper(root.current, { path: choices[wn], strength: root.strength })
+      root.applyWallpaperTargets({ path: choices[wn], strength: root.strength })
       root.hoverText = Palette.basename(choices[wn])
       return
     }
@@ -948,7 +1204,7 @@ Item {
     var i = -1
     for (var k = 0; k < list.length; k++) if (Palette.sameLook(list[k], root.scopeLook(term.look))) i = k
     var next = i < 0 ? (delta > 0 ? 0 : list.length - 1) : (i + delta + list.length) % list.length
-    root.commitWithWallpaper(root.current, list[next])
+    root.applyLookTargets(list[next])
     root.hoverText = root.describe(list[next])
   }
 
@@ -995,7 +1251,14 @@ Item {
     root.repaintAll = false
     root.applySolid()
     root.markSeen(list)
-    if (root.opened) root.terminals = list
+    if (root.opened) {
+      var previous = Workspace.key(root.selectedTerm)
+      root.terminals = list
+      root.histories = Workspace.prune(root.histories, list)
+      root.markedKeys = root.markedKeys.filter(function (k) { return list.some(function (t) { return Workspace.key(t) === k }) })
+      for (var j = 0; j < list.length; j++) if (Workspace.key(list[j]) === previous) root.current = j
+      root.ensureVisibleCurrent()
+    }
   }
 
   function toplevelFor(address) {
@@ -1079,13 +1342,17 @@ Item {
   }
 
   // ---- Config and first run ---------------------------------------------
-  function saveConfig() {
-    configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
+  property bool configDirty: false
+  function saveConfig() { root.configDirty = true; configSaveLater.restart() }
+  function writeConfig() {
+    if (configWriter.running) return
+    root.configDirty = false
+    configWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$(dirname "$1")" && tmp=$(mktemp "$1.XXXXXX") && { printf "%s\\n" "$2" > "$tmp" && mv -f "$tmp" "$1"; }',
       "sh", root.configFile, JSON.stringify({
         borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, strength: root.strength,
         hiddenSources: root.hiddenSources,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
-        projects: root.projects
+        projects: root.projects, savedLooks: root.savedLooks
       })]
     configWriter.running = true
   }
@@ -1101,6 +1368,7 @@ Item {
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
+      if (cfg && Array.isArray(cfg.savedLooks)) root.savedLooks = Workspace.library(cfg.savedLooks)
       if (cfg && Array.isArray(cfg.projects)) {
         root.projects = cfg.projects.map(function (r) {
           return r && typeof r.path === "string" && r.path.charAt(0) === "/"
@@ -1122,6 +1390,7 @@ Item {
       root.reapply()
     }
     root.configLoaded = true
+    if (root.requests.length) root.scan()
     root.maybeWelcome()
   }
 
@@ -1289,7 +1558,14 @@ Item {
     }
   }
 
-  Process { id: configWriter }
+  Timer { id: configSaveLater; interval: 40; onTriggered: root.writeConfig() }
+  Process {
+    id: configWriter
+    onExited: function (code) {
+      if (code !== 0) root.libraryMessage = "Could not save Ombre settings. Check that the configuration folder is writable."
+      else if (root.configDirty) configSaveLater.restart()
+    }
+  }
   Process { id: solidWriter }
   Timer { id: solidLater; interval: 400; onTriggered: root.applySolid() }
   Process {
@@ -1366,6 +1642,7 @@ Item {
       case "configreloaded": borderProbe.running = true; reapplyLater.restart(); break
       case "activewindowv2": root.activeAddress = data; root.stopPulse(data); break
       case "closewindow":
+        if (root.opened) root.scan()
         root.dropPulse(data)
         if (root.solidOriginal[data]) {
           var kept = Object.assign({}, root.solidOriginal)
@@ -1459,7 +1736,7 @@ Item {
       cursorShape: Qt.PointingHandCursor
       onEntered: root.preview(swatch.termIndex, Palette.tintLook(swatch.value), "background")
       onExited: previewEnd.restart()
-      onClicked: { root.current = swatch.termIndex; root.commit(swatch.termIndex, Palette.layerLook(root.terminals[swatch.termIndex].look, Palette.tintLook(swatch.value), "background")) }
+      onClicked: root.applyCardTint(swatch.termIndex, swatch.value)
     }
   }
 
@@ -1543,7 +1820,8 @@ Item {
     signal activated()
     Accessible.role: Accessible.Button
     Accessible.name: label
-    Accessible.onPressAction: activated()
+    Accessible.onPressAction: if (enabled) activated()
+    opacity: enabled ? 1 : 0.4
     width: buttonText.implicitWidth + Style.space(16)
     height: buttonText.implicitHeight + Style.space(12)
     radius: Style.cornerRadius
@@ -1565,7 +1843,7 @@ Item {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: textButton.activated()
+      onClicked: if (textButton.enabled) textButton.activated()
     }
   }
 
@@ -1704,10 +1982,18 @@ Item {
         focus: true
 
         Keys.onPressed: function (event) {
-          var n = root.terminals.length
           var k = event.key
           var shift = (event.modifiers & Qt.ShiftModifier) !== 0
-          if (k === Qt.Key_Escape || k === Qt.Key_Return || k === Qt.Key_Enter) root.dismiss()
+          var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+          if (ctrl && k === Qt.Key_F) { terminalSearch.forceActiveFocus(); terminalSearch.selectAll() }
+          else if (ctrl && k === Qt.Key_Z) root.travelHistory(root.current, shift ? "redo" : "undo")
+          else if (ctrl && k === Qt.Key_Y) root.travelHistory(root.current, "redo")
+          else if (ctrl && k === Qt.Key_A) root.selectVisible(false)
+          else if (ctrl && k === Qt.Key_Space) root.toggleMarked(root.current)
+          else if (ctrl && k === Qt.Key_S) { root.tab = "saved"; root.tabChosen = true; savedName.forceActiveFocus() }
+          else if (ctrl) return
+          else if (k === Qt.Key_Slash) terminalSearch.forceActiveFocus()
+          else if (k === Qt.Key_Escape || k === Qt.Key_Return || k === Qt.Key_Enter) root.dismiss()
           else if (k === Qt.Key_Tab) root.nextTab(1)
           else if (k === Qt.Key_Backtab) root.nextTab(-1)
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
@@ -1722,18 +2008,18 @@ Item {
           else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (k === Qt.Key_F && root.selectedTerm) root.saveProjectFrom(root.selectedTerm)
-          else if (n === 0) return
-          else if (k === Qt.Key_Right || k === Qt.Key_L) root.current = (root.current + 1) % n
-          else if (k === Qt.Key_Left || k === Qt.Key_H) root.current = (root.current - 1 + n) % n
-          else if (k === Qt.Key_Down || k === Qt.Key_J) root.current = Math.min(n - 1, root.current + root.columns)
-          else if (k === Qt.Key_Up || k === Qt.Key_K) root.current = Math.max(0, root.current - root.columns)
-          else if (k >= Qt.Key_1 && k <= Qt.Key_8) root.commit(root.current, Palette.tintLook(Palette.HUES[k - Qt.Key_1].id))
+          else if (root.filteredTerminals.length === 0) return
+          else if (k === Qt.Key_Right || k === Qt.Key_L) root.moveCurrent(1, true)
+          else if (k === Qt.Key_Left || k === Qt.Key_H) root.moveCurrent(-1, true)
+          else if (k === Qt.Key_Down || k === Qt.Key_J) root.moveCurrent(root.columns, false)
+          else if (k === Qt.Key_Up || k === Qt.Key_K) root.moveCurrent(-root.columns, false)
+          else if (k >= Qt.Key_1 && k <= Qt.Key_8) root.applyTintTargets(Palette.HUES[k - Qt.Key_1].id)
           else if (k === Qt.Key_0 || k === Qt.Key_Backspace || k === Qt.Key_Delete) {
-            if (root.tab === "wallpapers") root.setWallpaper(root.current, null)
-            else root.commit(root.current, null)
+            if (root.tab === "wallpapers") root.applyWallpaperTargets(null)
+            else root.resetTargets()
           }
           else if (k === Qt.Key_Space) root.stepLook(shift ? -1 : 1)
-          else if (k === Qt.Key_N) root.commit(root.current, Palette.tintLook(root.nextHue(root.selectedTerm.look)))
+          else if (k === Qt.Key_N) root.applyTintTargets(root.nextHue(root.selectedTerm.look))
           else return
           event.accepted = true
         }
@@ -1820,11 +2106,49 @@ Item {
             }
           }
 
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+            TextField {
+              id: terminalSearch
+              objectName: "ombreTerminalSearch"
+              width: parent.width - filterButtons.implicitWidth - Style.space(8)
+              placeholderText: "Search terminals, projects or workspaces…"
+              text: root.searchText
+              onTextChanged: if (root.searchText !== text) root.searchText = text
+              onAccepted: keyCatcher.forceActiveFocus()
+              Keys.onEscapePressed: { text = ""; keyCatcher.forceActiveFocus() }
+              Accessible.name: "Search terminals by title or project"
+            }
+            Row {
+              id: filterButtons
+              spacing: Style.space(8)
+              TextButton { label: "All workspaces"; chosen: !root.workspaceOnly; onActivated: root.workspaceOnly = false }
+              TextButton { label: "This workspace"; chosen: root.workspaceOnly; onActivated: root.workspaceOnly = true }
+              TextButton { label: "Clear filters"; enabled: root.searchText !== "" || root.workspaceOnly; onActivated: { root.searchText = ""; root.workspaceOnly = false } }
+            }
+          }
+          Row {
+            spacing: Style.space(8)
+            TextButton { label: "Select visible"; enabled: root.filteredTerminals.length > 0; onActivated: root.selectVisible(false) }
+            TextButton { label: "Select workspace"; enabled: root.filteredTerminals.some(function (t) { return t.workspace === root.openingWorkspace }); onActivated: root.selectVisible(true) }
+            TextButton { label: "Clear selection"; enabled: root.markedKeys.length > 0; onActivated: root.markedKeys = [] }
+            TextButton { label: "Undo"; enabled: root.selectedHistory.past.length > 0; onActivated: root.travelHistory(root.current, "undo") }
+            TextButton { label: "Redo"; enabled: root.selectedHistory.future.length > 0; onActivated: root.travelHistory(root.current, "redo") }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.filteredTerminals.length + "/" + root.terminals.length + " visible · " + root.actionTargets.length + (root.markedKeys.length ? " selected" : " target")
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+          }
+
           Text {
-            visible: root.terminals.length === 0
+            visible: root.filteredTerminals.length === 0
             width: parent.width
             wrapMode: Text.WordWrap
-            text: scanner.running ? "Looking for terminals…"
+            text: root.terminals.length ? "No terminals match. Clear the search or switch to All workspaces." : scanner.running ? "Looking for terminals…"
               : "No terminal windows found. Ombre works with terminals that run one process per window (Ghostty through Ombre's launcher, foot, Alacritty, Kitty)."
             color: root.muted
             font.family: root.fontFamily
@@ -1848,13 +2172,15 @@ Item {
               spacing: root.gap
 
               Repeater {
-                model: root.opened ? root.terminals : []
+                model: root.opened ? root.filteredTerminals : []
 
                 delegate: Rectangle {
                   id: tile
                   required property var modelData
                   required property int index
-                  readonly property bool selected: index === root.current
+                  readonly property int termIndex: modelData.sourceIndex
+                  readonly property bool selected: termIndex === root.current
+                  readonly property bool marked: root.markedKeys.indexOf(Workspace.key(modelData)) >= 0
                   readonly property real aspect: Math.max(0.2, Math.min(5, modelData.h / Math.max(1, modelData.w)))
                   readonly property var look: modelData.look
 
@@ -1863,7 +2189,7 @@ Item {
                   radius: Style.cornerRadius
                   color: selected ? Color.menu.selectedBackground : "transparent"
                   border.width: Math.max(1, Style.space(selected ? 2 : 1))
-                  border.color: selected ? root.accent : root.subtle
+                  border.color: selected || marked ? root.accent : root.subtle
 
                   onSelectedChanged: if (selected) {
                     if (y < cardsView.contentY) cardsView.contentY = y
@@ -1874,7 +2200,7 @@ Item {
                   MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: { root.current = tile.index; keyCatcher.forceActiveFocus() }
+                    onClicked: function (mouse) { root.selectCard(tile.termIndex, (mouse.modifiers & Qt.ControlModifier) !== 0); keyCatcher.forceActiveFocus() }
                   }
 
                   Column {
@@ -1925,6 +2251,15 @@ Item {
                           font.bold: true
                         }
                       }
+                      TextButton {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Style.space(6)
+                        label: tile.marked ? "✓" : "+"
+                        chosen: tile.marked
+                        Accessible.name: (tile.marked ? "Deselect " : "Select ") + tile.modelData.title
+                        onActivated: { root.toggleMarked(tile.termIndex); keyCatcher.forceActiveFocus() }
+                      }
                     }
 
                     Item {
@@ -1968,14 +2303,14 @@ Item {
                         delegate: Swatch {
                           required property var modelData
                           value: modelData.id
-                          termIndex: tile.index
+                          termIndex: tile.termIndex
                           chosen: Palette.backgroundLook(tile.look) !== null && Palette.backgroundLook(tile.look).kind === "tint" && Palette.backgroundLook(tile.look).id === modelData.id
                         }
                       }
 
                       Swatch {
                         value: ""
-                        termIndex: tile.index
+                        termIndex: tile.termIndex
                         chosen: Palette.backgroundLook(tile.look) === null
                       }
                     }
@@ -2103,11 +2438,33 @@ Item {
             }
           }
 
+          Flickable {
+            visible: root.favoriteLooks.length > 0
+            width: parent.width
+            height: favoriteRow.implicitHeight
+            contentWidth: favoriteRow.implicitWidth
+            contentHeight: height
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            Row {
+              id: favoriteRow
+              spacing: Style.space(8)
+              Repeater {
+                model: root.favoriteLooks
+                delegate: TextButton {
+                  required property var modelData
+                  label: "★ " + modelData.name
+                  onActivated: root.applySavedTargets(modelData)
+                }
+              }
+            }
+          }
+
           Row {
-            visible: root.tab === "moods" || root.tab === "themes"
+            visible: root.tab === "saved" || root.tab === "moods" || root.tab === "themes"
             spacing: Style.space(8)
             Text {
-              text: "Apply to"
+              text: "Layers"
               color: root.muted
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -2137,7 +2494,7 @@ Item {
                 delegate: TabButton {
                   required property var modelData
                   name: modelData
-                  text: modelData === "default" ? "Projects & new terminals" : Palette.pretty(modelData)
+                  text: modelData === "default" ? "Projects & new terminals" : modelData === "saved" ? "Saved looks" : Palette.pretty(modelData)
                 }
               }
             }
@@ -2183,12 +2540,100 @@ Item {
                 id: appliesText
                 width: Math.min(implicitWidth, root.contentWidth * 0.45)
                 text: !root.selectedTerm ? ""
+                : root.markedKeys.length ? "for " + root.actionTargets.length + " selected terminals"
                 : "for " + root.selectedTerm.title + (root.selectedTerm.visible ? ""
                   : " · on workspace " + root.selectedTerm.workspace + ", not on screen")
                 elide: Text.ElideRight
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
+              }
+            }
+          }
+
+          Column {
+            visible: root.tab === "saved"
+            width: parent.width
+            spacing: Style.space(10)
+            Row {
+              spacing: Style.space(8)
+              TextField {
+                id: savedName
+                objectName: "ombreSavedName"
+                width: Style.space(260)
+                maximumLength: 64
+                placeholderText: root.editingSavedName ? "New name for " + root.editingSavedName : "Name the active terminal’s look…"
+                onAccepted: root.submitSavedName(text)
+                Keys.onEscapePressed: { root.editingSavedName = ""; text = ""; keyCatcher.forceActiveFocus() }
+                Accessible.name: "Saved look name"
+              }
+              TextButton { label: root.editingSavedName ? "Rename" : "Save active look"; enabled: root.editingSavedName !== "" || root.selectedTerm !== null; onActivated: root.submitSavedName(savedName.text) }
+              TextButton { visible: root.editingSavedName !== ""; label: "Cancel rename"; onActivated: { root.editingSavedName = ""; savedName.text = "" } }
+              TextButton { label: "Favourites only"; chosen: root.favoritesOnly; onActivated: root.favoritesOnly = !root.favoritesOnly }
+            }
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: root.libraryMessage || "Save the active terminal’s exact colours, wallpaper and strength. Click a saved look to apply it to the selected targets."
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Text {
+              visible: root.sortedLooks.length === 0
+              text: root.savedLooks.length ? "No favourites yet. Star a saved look to keep it close." : "No saved looks yet. Give a terminal a look, then save it above."
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            Flickable {
+              width: parent.width
+              height: Math.min(savedColumn.implicitHeight, Style.space(240))
+              contentWidth: width
+              contentHeight: savedColumn.implicitHeight
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              Column {
+                id: savedColumn
+                spacing: Style.space(8)
+                Repeater {
+                  model: root.opened && root.tab === "saved" ? root.sortedLooks : []
+                  delegate: Row {
+                    id: savedRow
+                    required property var modelData
+                    spacing: Style.space(8)
+                    LookChip {
+                      width: Style.space(240)
+                      label: savedRow.modelData.name
+                      look: root.savedChipLook(savedRow.modelData)
+                      image: savedRow.modelData.wallpaper ? savedRow.modelData.wallpaper.path : ""
+                      chosen: root.selectedTerm !== null && Workspace.same(root.selectedTerm, savedRow.modelData)
+                      onHoverStarted: {
+                        root.preview(root.current, savedRow.modelData.look, root.applyScope)
+                        if (root.applyScope !== "text" && root.selectedTakesWallpaper) root.previewWallpaper(root.current, savedRow.modelData.wallpaper)
+                      }
+                      onHoverEnded: previewEnd.restart()
+                      onPicked: root.applySavedTargets(savedRow.modelData)
+                    }
+                    TextButton {
+                      anchors.verticalCenter: parent.verticalCenter
+                      label: savedRow.modelData.favorite ? "★" : "☆"
+                      chosen: savedRow.modelData.favorite
+                      Accessible.name: (savedRow.modelData.favorite ? "Unstar " : "Star ") + savedRow.modelData.name
+                      onActivated: root.favoriteNamedLook(savedRow.modelData.name)
+                    }
+                    TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Update"; enabled: root.selectedTerm !== null; onActivated: root.saveNamedLook(savedRow.modelData.name, root.selectedTerm, true) }
+                    TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Rename"; onActivated: { root.editingSavedName = savedRow.modelData.name; savedName.text = savedRow.modelData.name; savedName.forceActiveFocus(); savedName.selectAll() } }
+                    TextButton {
+                      anchors.verticalCenter: parent.verticalCenter
+                      label: root.pendingDeleteName === savedRow.modelData.name ? "Confirm delete" : "Delete"
+                      onActivated: {
+                        if (root.pendingDeleteName === savedRow.modelData.name) root.removeNamedLook(savedRow.modelData.name)
+                        else { root.pendingDeleteName = savedRow.modelData.name; root.libraryMessage = "Click Confirm delete to remove " + savedRow.modelData.name + "." }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -2332,7 +2777,7 @@ Item {
                     fontFamily: root.fontFamily
                     onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
                     onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
-                    onPicked: root.commitWithWallpaper(root.current, modelData)
+                    onPicked: root.applyLookTargets(modelData)
                   }
                 }
               }
@@ -2366,7 +2811,7 @@ Item {
                   fontFamily: root.fontFamily
                   onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
                   onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
-                  onPicked: root.commitWithWallpaper(root.current, modelData)
+                  onPicked: root.applyLookTargets(modelData)
                 }
               }
             }
@@ -2411,7 +2856,7 @@ Item {
 
             Row {
               spacing: Style.space(8)
-              opacity: root.selectedTakesWallpaper ? 1 : 0.4
+              opacity: root.targetTakesWallpaper ? 1 : 0.4
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
@@ -2426,7 +2871,7 @@ Item {
                 delegate: TextButton {
                   required property var modelData
                   label: modelData.name
-                  chosen: root.strength === modelData.value
+                  chosen: (root.selectedTerm && root.selectedTerm.wallpaper ? root.selectedTerm.wallpaper.strength : root.strength) === modelData.value
                   onActivated: root.setStrength(modelData.value)
                 }
               }
@@ -2440,7 +2885,7 @@ Item {
               clip: true
               interactive: contentHeight > height
               boundsBehavior: Flickable.StopAtBounds
-              opacity: root.selectedTakesWallpaper ? 1 : 0.4
+              opacity: root.targetTakesWallpaper ? 1 : 0.4
 
               Flow {
                 id: wallFlow
@@ -2490,7 +2935,7 @@ Item {
                       anchors.fill: parent
                       hoverEnabled: true
                       acceptedButtons: Qt.LeftButton | Qt.RightButton
-                      cursorShape: root.selectedTakesWallpaper ? Qt.PointingHandCursor : Qt.ArrowCursor
+                      cursorShape: root.targetTakesWallpaper ? Qt.PointingHandCursor : Qt.ArrowCursor
                       onEntered: {
                         root.hoverText = wallTile.modelData ? Palette.basename(wallTile.modelData) : "No wallpaper"
                         if (root.selectedTakesWallpaper)
@@ -2501,8 +2946,8 @@ Item {
                         if (mouse.button === Qt.RightButton && wallTile.modelData) {
                           if (root.hiddenSources.indexOf(wallTile.modelData) >= 0) root.unhideSource(wallTile.modelData)
                           else root.hideSource(wallTile.modelData)
-                        } else if (root.selectedTakesWallpaper)
-                          root.setWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                        } else if (root.targetTakesWallpaper)
+                          root.applyWallpaperTargets(wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
                       }
                     }
                   }
@@ -2671,7 +3116,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Select a terminal · Hover to preview · Click to apply     /     1–8 tint · Space next preset · Tab switch · Esc close"
+              || "Ctrl-click / + select · Ctrl+F search · Ctrl+S save · Ctrl+Z / Shift+Z undo / redo active · Tab switch · Esc close"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

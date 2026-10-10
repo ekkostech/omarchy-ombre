@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0 — 2026-10-10
+- Named saved looks preserve exact text and background colours, wallpaper and strength; star favourites for quick access, rename and update saved looks.
+- Undo and redo changes separately for each terminal, including combined palette/wallpaper changes. Hover previews and automatic project/default rules stay out of history.
+- Select multiple terminal cards or the visible workspace and style them together; filters keep hidden terminals out of batch actions.
+- Search by terminal title, project path or workspace, with a current-workspace filter and keyboard navigation through matching cards.
+
 ## 1.4.3 — 2026-10-10
 - The picker always displays the installed plugin version beneath the Ombre logo. The label reads the manifest, so it follows future updates automatically.
 
