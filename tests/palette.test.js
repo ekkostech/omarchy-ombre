@@ -204,3 +204,21 @@ test("Ghostty writer shell parses and serializes the extra palette token", () =>
   assert.ok(script.includes('colors=${rest%% *}'));
   assert.ok(script.includes('printf "%s\\n" "$colors" | tr ";" "\\n"'));
 });
+
+
+test("explicit text color updates default foreground and ANSI normal/bright white together", () => {
+  for (const base of [null, mood("ocean", "#b0d8ee", "#101830")]) {
+    const look = P.foregroundLook(base, "#ff66cc");
+    const seq = P.sequence(look, "#000000");
+    assert.ok(seq.includes("\x1b]10;#ff66cc\x1b\\"));
+    assert.ok(seq.includes("\x1b]4;7;#ff66cc\x1b\\"));
+    assert.ok(seq.includes("\x1b]4;15;#ff66cc\x1b\\"));
+    const conf = P.ghosttyColors(look, "#000000").split(";");
+    assert.equal(conf.filter(x => x.startsWith("palette=7=")).at(-1), "palette=7=ff66cc");
+    assert.equal(conf.filter(x => x.startsWith("palette=15=")).at(-1), "palette=15=ff66cc");
+    if (base) {
+      assert.ok(seq.includes("\x1b]4;1;#112231\x1b\\"), "semantic red remains from the palette");
+      assert.equal(P.lookBackground(look, "#000000"), "#101830");
+    }
+  }
+});

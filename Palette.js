@@ -262,6 +262,10 @@ function ghosttyColors(look, themeBackground) {
   }
   var fg = lookForeground(look), bg = lookBackground(look, themeBackground);
   if (fg) lines.push("foreground=" + fg.slice(1));
+  if (look && isHex(look.foreground)) {
+    lines.push("palette=7=" + look.foreground.slice(1));
+    lines.push("palette=15=" + look.foreground.slice(1));
+  }
   if (bg) lines.push("background=" + bg.slice(1));
   return lines.join(";") || "-";
 }
@@ -309,6 +313,7 @@ function sequence(look, themeBackground) {
     for (var i = 0; i < 16; i++) out += osc("4;" + i + ";" + t.palette.colors[i]);
     out += osc("12;" + t.palette.cursor);
   } else out = osc("104") + osc("112");
+  if (look && isHex(look.foreground)) out += osc("4;7;" + look.foreground) + osc("4;15;" + look.foreground);
   var fg = lookForeground(look), bg = lookBackground(look, themeBackground);
   return out + (fg ? osc("10;" + fg) : osc("110")) + (bg ? osc("11;" + bg) : osc("111"));
 }

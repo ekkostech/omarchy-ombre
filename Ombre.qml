@@ -200,7 +200,7 @@ Item {
   // ---- Scripting (omarchy-shell shell call <id> <method> <arg>) ---------
   // apply '{"value": V, "target": T, "strength": S}', or a bare value for the focused terminal.
   //   V: red | #203040 | next | reset | mood:fire | mood:fire@/path/wall.jpg | theme:tokyo-night
-  //      | wallpaper:/path/wall.jpg | wallpaper:none
+  //      | wallpaper:/path/wall.jpg | wallpaper:none | text:#rrggbb
   //   T: focused | title:TEXT | pid:N | address:HEX | all
   function apply(arg) {
     var req
@@ -340,7 +340,7 @@ Item {
   }
 
   function validSpec(v) {
-    return v === "next" || v === "reset" || Palette.tintLook(v) !== null
+    return v === "next" || v === "reset" || Palette.tintLook(v) !== null || /^text:#[0-9a-fA-F]{6}$/.test(v)
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
       || v === "pulse:now" || v === "pulse:stop"
@@ -414,6 +414,13 @@ Item {
         for (var w = 0; w < hits.length; w++) {
           if (hits[w].wallpaperReady) root.setWallpaper(root.indexOf(hits[w].pty), wp)
           else console.warn("ombre: " + hits[w].title + " can't take a wallpaper")
+        }
+        continue
+      }
+      if (req.value.indexOf("text:") === 0) {
+        for (var ti = 0; ti < hits.length; ti++) {
+          var textIndex = root.indexOf(hits[ti].pty)
+          root.commit(textIndex, Palette.foregroundLook(root.terminals[textIndex].look, req.value.slice(5)))
         }
         continue
       }
@@ -1990,6 +1997,40 @@ Item {
                     onActivated: { root.endPreview(); root.applyScope = modelData; root.tab = "moods" }
                   }
                   TextButton { label: "Reset"; onActivated: root.resetLayer(modelData) }
+                }
+                Row {
+                  visible: modelData === "text"
+                  spacing: Style.space(8)
+                  Text {
+                    text: "Text tint"
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                  Repeater {
+                    model: Palette.HUES
+                    delegate: Rectangle {
+                      required property var modelData
+                      readonly property string textColor: Palette.mix(modelData.hex,
+                        Palette.isLight(root.selectedTerm ? (Palette.lookBackground(root.selectedTerm.look, root.themeBackground) || root.themeBackground) : root.themeBackground)
+                          ? "#000000" : "#ffffff", 0.35)
+                      width: root.swatchSize
+                      height: width
+                      radius: width / 2
+                      color: textColor
+                      border.width: root.selectedTerm && Palette.lookForeground(root.selectedTerm.look) === textColor ? 2 : 0
+                      border.color: root.text
+                      MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onEntered: root.hoverText = modelData.name + " text · keeps your background and syntax palette"
+                        onExited: root.hoverText = ""
+                        onClicked: root.setLayerColor("text", textColor)
+                      }
+                    }
+                  }
                 }
               }
             }
