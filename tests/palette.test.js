@@ -9,7 +9,7 @@ const vm = require("node:vm");
 const src = fs.readFileSync(path.join(__dirname, "..", "Palette.js"), "utf8").replace(/^\.pragma library\s*/, "");
 const P = {};
 vm.runInNewContext(src + "\n" + [
-  "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
+  "layerLook", "foregroundLook", "textLook", "backgroundLook", "lookForeground", "ghosttyColors", "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
   "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper",
   "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "themeGradient", "borderPair", "isImagePath", "themePalette", "parseToml"
 ].map((n) => `P.${n} = ${n};`).join("\n"), { P, JSON, Math });
@@ -125,4 +125,82 @@ test("no look puts the theme's border back instead of emptying it", () => {
   assert.ok(back.includes('prop = "inactive_border_color", value = "rgba(595959aa)"'));
   assert.ok(!back.includes("-1"));
   assert.ok(P.borderPair("ab12", "#3e63dd", "ff", "#1a2a5a", "ff", theme).includes('value = "rgba(3e63ddff)"'));
+});
+
+const mood = (id, fg, bg) => ({kind: "mood", id, source: "/wall.jpg", palette: {
+  foreground: fg, background: bg, cursor: "#abcdef", accent: "#6699aa",
+  colors: Array.from({length: 16}, (_, i) => "#" + (0x112230 + i).toString(16))
+}});
+
+test("background changes preserve mood text, ANSI colors and foreground overrides", () => {
+  const fire = mood("fire", "#eec8b0", "#301210");
+  const custom = P.foregroundLook(fire, "#ffeedd");
+  const changed = P.layerLook(custom, P.tintLook("blue"), "background");
+  assert.equal(P.lookForeground(changed), "#ffeedd");
+  assert.equal(P.textLook(changed).id, "fire");
+  assert.equal(P.backgroundLook(changed).id, "blue");
+  const seq = P.sequence(changed, "#101010");
+  assert.ok(seq.includes("\x1b]4;1;#112231\x1b\\"));
+  assert.ok(seq.includes("\x1b]10;#ffeedd\x1b\\"));
+  assert.ok(!seq.includes("\x1b]104\x1b\\"));
+});
+
+test("text-only presets preserve background; each layer resets independently", () => {
+  const fire = mood("fire", "#eec8b0", "#301210");
+  const ocean = mood("ocean", "#b0d8ee", "#101830");
+  const combined = P.layerLook(fire, ocean, "text");
+  assert.equal(P.lookForeground(combined), "#b0d8ee");
+  assert.equal(P.lookBackground(combined, "#000000"), "#301210");
+  const defaultText = P.layerLook(combined, null, "text");
+  assert.equal(P.textLook(defaultText), null);
+  assert.equal(P.lookBackground(defaultText, "#000000"), "#301210");
+  assert.equal(P.layerLook(defaultText, null, "background"), null);
+  assert.equal(P.layerLook(combined, ocean, "all").kind, "mood");
+});
+
+test("layered looks survive state serialization and reject nested/invalid data", () => {
+  const look = P.foregroundLook(P.layerLook(null, mood("fire", "#eec8b0", "#301210"), "text"), "#FfEeDd");
+  const parsed = P.parseState('pts-3 ' + JSON.stringify({pid: "100", look}) + '\n');
+  assert.equal(JSON.stringify(parsed["pts/3"].look), JSON.stringify(look));
+  assert.equal(P.normalizeLook({kind: "layers", text: {kind: "layers"}, foreground: "x;command"}), null);
+  assert.equal(P.normalizeLook({kind: "layers", text: P.tintLook("blue")}), null);
+});
+
+test("Ghostty config contains the same text/background colors as OSC and clears absent layers", () => {
+  const look = P.layerLook(mood("fire", "#eec8b0", "#301210"), P.tintLook("#102030"), "background");
+  const conf = P.ghosttyColors(look, "#000000").split(";");
+  assert.ok(conf.includes("foreground=eec8b0"));
+  assert.ok(conf.includes("background=102030"));
+  assert.ok(conf.includes("palette=1=112231"));
+  assert.equal(conf.filter(x => x.startsWith("palette=")).length, 16);
+  assert.equal(P.ghosttyColors(null, "#000000"), "-");
+  assert.equal(P.ghosttyColors(P.layerLook(look, null, "text"), "#000000"), "background=102030");
+});
+
+const qml = fs.readFileSync(path.join(__dirname, "..", "Ombre.qml"), "utf8");
+function qmlFunction(name, context) {
+  const start = qml.indexOf("  function " + name + "(");
+  // Stop at the function's root indentation, retaining nested functions.
+  const bodyEnd = qml.indexOf("\n  }", start) + 4;
+  return vm.runInNewContext("(" + qml.slice(start, bodyEnd).trim() + ")", context);
+}
+
+test("wallpaper reload replay retains the active hover preview instead of resetting colors", () => {
+  const preview = mood("ocean", "#b0d8ee", "#101830");
+  const terminal = {pty: "pts/1", look: mood("fire", "#eec8b0", "#301210")};
+  const shown = [];
+  const root = {reshowPtys: ["pts/1"], terminals: [terminal], indexOf: () => 0,
+    previewPty: "pts/1", previewLook: preview, show: (t, look) => shown.push(look)};
+  qmlFunction("onReshow", {root})();
+  assert.equal(shown[0], preview);
+});
+
+test("Ghostty writer shell parses and serializes the extra palette token", () => {
+  const {spawnSync} = require("node:child_process");
+  const expression = qml.split("readonly property string writerScript:")[1].split("\n  Process {")[0].trim();
+  const script = vm.runInNewContext(expression);
+  const result = spawnSync("sh", ["-n"], {input: script, encoding: "utf8"});
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(script.includes('colors=${rest%% *}'));
+  assert.ok(script.includes('printf "%s\\n" "$colors" | tr ";" "\\n"'));
 });

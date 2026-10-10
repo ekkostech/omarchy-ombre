@@ -25,6 +25,8 @@ Item {
   property var terminals: []
   property int current: 0
   property string previewPty: ""
+  property var previewLook: null
+  property string applyScope: "all"
   property string previewWallpaperPty: ""
   property bool focusOnScan: false
   property bool rescan: false
@@ -482,6 +484,7 @@ Item {
   }
 
   function nextHue(look) {
+    look = Palette.backgroundLook(look)
     var i = look && look.kind === "tint" ? Palette.hueIndex(look.id) : -1
     return Palette.HUES[(i + 1) % Palette.HUES.length].id
   }
@@ -598,12 +601,14 @@ Item {
 
   function commit(index, look) {
     if (index < 0 || index >= root.terminals.length) return
+    // A background swatch must never discard the selected text palette.
+    if (look && look.kind === "tint") look = Palette.layerLook(root.terminals[index].look, look, "background")
     look = Palette.normalizeLook(look)
     if (root.previewPty === root.terminals[index].pty) root.previewPty = ""
     var term = root.update(index, { look: look })
     root.show(term, look)
     root.persist(term)
-    if (root.textShadow && term.wallpaperReady) root.sendWallpaper(term, term.wallpaper)
+    if (term.wallpaperReady) root.sendWallpaper(term, term.wallpaper)
     if (root.pulses[term.address]) {
       var pulses = Object.assign({}, root.pulses)
       pulses[term.address] = Object.assign({}, pulses[term.address],
@@ -612,12 +617,32 @@ Item {
     }
   }
 
+  function scopeLook(look) {
+    return root.applyScope === "text" ? Palette.textLook(look)
+      : root.applyScope === "background" ? Palette.backgroundLook(look) : look
+  }
+
+  function setLayerColor(layer, value) {
+    if (!root.selectedTerm || (value && !Palette.isHex(value))) return
+    root.endPreview()
+    var look = root.selectedTerm.look
+    root.commit(root.current, layer === "text" ? Palette.foregroundLook(look, value)
+      : Palette.layerLook(look, Palette.tintLook(value), "background"))
+  }
+
+  function resetLayer(layer) {
+    if (!root.selectedTerm) return
+    root.endPreview()
+    root.commit(root.current, Palette.layerLook(root.selectedTerm.look, null, layer))
+  }
+
   // A mood or theme, with its wallpaper too when the window can take one.
   function commitWithWallpaper(index, look) {
-    root.commit(index, look)
+    if (index < 0 || index >= root.terminals.length) return
+    root.commit(index, Palette.layerLook(root.terminals[index].look, look, root.applyScope))
     var term = root.terminals[index]
     var image = look ? (look.kind === "mood" ? look.source : look.image) : ""
-    if (root.withWallpaper && term && term.wallpaperReady && Palette.isImagePath(image))
+    if (root.applyScope !== "text" && root.withWallpaper && term && term.wallpaperReady && Palette.isImagePath(image))
       root.setWallpaper(index, { path: image, strength: root.strength })
   }
 
@@ -626,7 +651,7 @@ Item {
   function sendWallpaper(term, wallpaper) {
     var w = Palette.normalizeWallpaper(wallpaper)
     root.send("ghostty " + term.pid + " " + (term.confDir || root.runtimeDir + "/ghostty/") + " "
-      + root.shadowVariant(term) + " " + (w ? w.strength + " " + w.path : "- -"))
+      + root.shadowVariant(term) + " " + Palette.ghosttyColors(term.look, root.themeBackground) + " " + (w ? w.strength + " " + w.path : "- -"))
     // Re-send the look once the reload settles, in case it reset the colors.
     if (root.reshowPtys.indexOf(term.pty) < 0) root.reshowPtys = root.reshowPtys.concat([term.pty])
     reshowLater.restart()
@@ -641,13 +666,14 @@ Item {
     root.persist(term)
   }
 
-  function preview(index, look) {
+  function preview(index, look, scope) {
     if (index < 0 || index >= root.terminals.length) return
     previewEnd.stop()
     var term = root.terminals[index]
     if (root.previewPty && root.previewPty !== term.pty) root.endPreview()
     root.previewPty = term.pty
-    root.show(term, Palette.normalizeLook(look))
+    root.previewLook = Palette.layerLook(term.look, look, scope || (look && look.kind === "tint" ? "background" : root.applyScope))
+    root.show(term, root.previewLook)
   }
 
   // Wallpaper previews reload Ghostty, so they wait until the pointer rests.
@@ -692,7 +718,7 @@ Item {
       var k = root.indexOf(ptys[i])
       if (k < 0) continue
       var t = root.terminals[k]
-      root.show(t, root.previewPty === t.pty ? null : t.look)
+      root.show(t, root.previewPty === t.pty ? root.previewLook : t.look)
     }
   }
 
@@ -781,7 +807,7 @@ Item {
   function ruleLabel(rule) {
     if (!rule) return ""
     var parts = []
-    if (rule.look) parts.push(rule.look.kind === "tint" ? Palette.lookLabel(rule.look) : Palette.pretty(rule.look.id))
+    if (rule.look) parts.push(Palette.lookLabel(rule.look))
     if (rule.wallpaper) parts.push(Palette.basename(rule.wallpaper.path) + " wallpaper")
     return parts.join(" with ") || "their own colors"
   }
@@ -822,7 +848,7 @@ Item {
   function leastUsedHue() {
     var counts = {}
     for (var i = 0; i < root.terminals.length; i++) {
-      var l = root.terminals[i].look
+      var l = Palette.backgroundLook(root.terminals[i].look)
       if (l && l.kind === "tint" && Palette.hue(l.id)) counts[l.id] = (counts[l.id] || 0) + 1
     }
     var best = Palette.HUES[0].id
@@ -861,7 +887,7 @@ Item {
     if (d.mode === "auto") return "a different tint each"
     if (d.mode !== "look") return "their own colors"
     var parts = []
-    if (d.look) parts.push(d.look.kind === "tint" ? Palette.lookLabel(d.look) : Palette.pretty(d.look.id))
+    if (d.look) parts.push(Palette.lookLabel(d.look))
     if (d.wallpaper) parts.push(Palette.basename(d.wallpaper.path) + " wallpaper")
     return parts.join(" with ") || "their own colors"
   }
@@ -882,7 +908,7 @@ Item {
     var list = root.tab === "moods" ? root.moods : root.catalog.themes
     if (list.length === 0) return
     var i = -1
-    for (var k = 0; k < list.length; k++) if (Palette.sameLook(list[k], term.look)) i = k
+    for (var k = 0; k < list.length; k++) if (Palette.sameLook(list[k], root.scopeLook(term.look))) i = k
     var next = i < 0 ? (delta > 0 ? 0 : list.length - 1) : (i + delta + list.length) % list.length
     root.commitWithWallpaper(root.current, list[next])
     root.hoverText = root.describe(list[next])
@@ -922,7 +948,10 @@ Item {
     var list = root.parseScan(output)
     if (!list) return
     for (var i = 0; i < list.length; i++) {
-      if (list[i].look) root.show(list[i], list[i].look)
+      if (list[i].look) {
+        root.show(list[i], list[i].look)
+        if (list[i].wallpaperReady) root.sendWallpaper(list[i], list[i].wallpaper)
+      }
       else if (root.repaintAll) root.paintBorder(list[i], null)
     }
     root.repaintAll = false
@@ -1131,7 +1160,7 @@ Item {
   //   write PTY SEQUENCE     escape sequence for the terminal (validated hex colors only)
   //   save PTY JSON          remember the look for the picker
   //   forget PTY
-  //   ghostty PID CONFDIR SHADOW STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
+  //   ghostty PID CONFDIR SHADOW COLORS STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
   //     SHADOW is dark, light or -; STRENGTH PATH are "- -" for no wallpaper
   readonly property string writerScript:
     'umask 077; d=$1; plug=$2; mkdir -p "$d/ghostty" 2>/dev/null\n'
@@ -1151,11 +1180,12 @@ Item {
     + '    ghostty)\n'
     + '      case $key in ""|*[!0-9]*) continue ;; esac\n'
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
-    + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; path=${rest#* }\n'
+    + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; path=${rest#* }\n'
     + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
     + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
+    + '        if [ "$colors" != "-" ]; then printf "%s\\n" "$colors" | tr ";" "\\n"; fi\n'
     + '        case $shadow in dark|light)\n'
     + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow"\n'
     + '          echo "custom-shader-animation = false" ;;\n'
@@ -1380,9 +1410,9 @@ Item {
       anchors.margins: -Style.space(3)
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.preview(swatch.termIndex, Palette.tintLook(swatch.value))
+      onEntered: root.preview(swatch.termIndex, Palette.tintLook(swatch.value), "background")
       onExited: previewEnd.restart()
-      onClicked: { root.current = swatch.termIndex; root.commit(swatch.termIndex, Palette.tintLook(swatch.value)) }
+      onClicked: { root.current = swatch.termIndex; root.commit(swatch.termIndex, Palette.layerLook(root.terminals[swatch.termIndex].look, Palette.tintLook(swatch.value), "background")) }
     }
   }
 
@@ -1411,6 +1441,51 @@ Item {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: { root.tab = tabButton.name; root.tabChosen = true }
+    }
+  }
+
+  component ColorField: Rectangle {
+    id: colorField
+    property string value: ""
+    signal applied(string value)
+    width: Style.space(116)
+    height: Style.space(30)
+    radius: Style.cornerRadius
+    color: root.surface
+    border.width: Math.max(1, Style.space(1))
+    border.color: colorInput.activeFocus ? root.accent : root.subtle
+    onValueChanged: if (!colorInput.activeFocus) colorInput.text = value
+    Text {
+      anchors.centerIn: parent
+      visible: colorInput.text === ""
+      text: "#rrggbb"
+      color: root.muted
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+    TextInput {
+      id: colorInput
+      property string targetPty: ""
+      onActiveFocusChanged: if (activeFocus) targetPty = root.selectedTerm ? root.selectedTerm.pty : ""
+      anchors.fill: parent
+      anchors.margins: Style.space(6)
+      text: colorField.value
+      color: root.text
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      selectByMouse: true
+      maximumLength: 7
+      validator: RegularExpressionValidator { regularExpression: /#[0-9a-fA-F]{6}/ }
+      onAccepted: {
+        if (acceptableInput && root.selectedTerm && targetPty === root.selectedTerm.pty) colorField.applied(text)
+        keyCatcher.forceActiveFocus()
+      }
+      onEditingFinished: {
+        if (acceptableInput && text !== colorField.value && root.selectedTerm && targetPty === root.selectedTerm.pty)
+          colorField.applied(text)
+        text = colorField.value
+      }
+      Keys.onEscapePressed: { text = colorField.value; keyCatcher.forceActiveFocus() }
     }
   }
 
@@ -1568,8 +1643,12 @@ Item {
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
-      Item {
+      Flickable {
         id: keyCatcher
+        contentWidth: content.width
+        contentHeight: content.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
         anchors.fill: parent
         anchors.margins: root.pad
         focus: true
@@ -1850,14 +1929,14 @@ Item {
                           required property var modelData
                           value: modelData.id
                           termIndex: tile.index
-                          chosen: tile.look !== null && tile.look.kind === "tint" && tile.look.id === modelData.id
+                          chosen: Palette.backgroundLook(tile.look) !== null && Palette.backgroundLook(tile.look).kind === "tint" && Palette.backgroundLook(tile.look).id === modelData.id
                         }
                       }
 
                       Swatch {
                         value: ""
                         termIndex: tile.index
-                        chosen: tile.look === null
+                        chosen: Palette.backgroundLook(tile.look) === null
                       }
                     }
                   }
@@ -1867,6 +1946,75 @@ Item {
           }
 
           Rectangle { width: parent.width; height: Math.max(1, Style.space(1)); color: root.subtle }
+
+          // Keep both layers visible while browsing presets or wallpapers.
+          Row {
+            visible: root.selectedTerm !== null
+            width: parent.width
+            spacing: Style.space(24)
+            Repeater {
+              model: ["text", "background"]
+              delegate: Column {
+                required property string modelData
+                width: (root.contentWidth - Style.space(24)) / 2
+                spacing: Style.space(6)
+                Row {
+                  spacing: Style.space(10)
+                  Text {
+                    text: modelData === "text" ? "Text colors" : "Background"
+                    color: root.text
+                    font.bold: true
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+                  Text {
+                    text: !root.selectedTerm ? "" : modelData === "text"
+                      ? Palette.textLabel(root.selectedTerm.look) : Palette.backgroundLabel(root.selectedTerm.look)
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    width: Style.space(150)
+                    elide: Text.ElideRight
+                  }
+                }
+                Row {
+                  spacing: Style.space(8)
+                  ColorField {
+                    value: !root.selectedTerm ? "" : modelData === "text"
+                      ? Palette.lookForeground(root.selectedTerm.look) : Palette.lookBackground(root.selectedTerm.look, root.themeBackground)
+                    onApplied: function(value) { root.setLayerColor(modelData, value) }
+                  }
+                  TextButton {
+                    label: "Choose palette"
+                    chosen: root.applyScope === modelData
+                    onActivated: { root.endPreview(); root.applyScope = modelData; root.tab = "moods" }
+                  }
+                  TextButton { label: "Reset"; onActivated: root.resetLayer(modelData) }
+                }
+              }
+            }
+          }
+
+          Row {
+            visible: root.tab === "moods" || root.tab === "themes"
+            spacing: Style.space(8)
+            Text {
+              text: "Apply to"
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Repeater {
+              model: [{id: "all", label: "Complete preset"}, {id: "text", label: "Text colors"}, {id: "background", label: "Background"}]
+              delegate: TextButton {
+                required property var modelData
+                label: modelData.label
+                chosen: root.applyScope === modelData.id
+                onActivated: { root.endPreview(); root.applyScope = modelData.id }
+              }
+            }
+          }
 
           // Moods, themes and wallpapers apply to the selected terminal.
           Item {
@@ -1907,7 +2055,7 @@ Item {
               }
 
               Text {
-                visible: (root.tab === "moods" || root.tab === "themes") && root.selectedTakesWallpaper
+                visible: root.applyScope !== "text" && (root.tab === "moods" || root.tab === "themes") && root.selectedTakesWallpaper
                 text: (root.withWallpaper ? "\uDB80\uDD32" : "\uDB80\uDD31") + " with its wallpaper"
                 color: withArea.containsMouse ? root.text : root.muted
                 font.family: root.fontFamily
@@ -1950,6 +2098,14 @@ Item {
               color: root.text
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
+            }
+
+            Text {
+              visible: root.catalog.aether
+              text: root.catalog.modes.length + " Aether styles · moods, pastel, muted, color harmonies and more"
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
             }
 
             // Wallpapers to draw moods from; the current one comes first.
@@ -2063,7 +2219,7 @@ Item {
                     required property var modelData
                     look: modelData
                     label: Palette.pretty(modelData.id)
-                    chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.selectedTerm.look)
+                    chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
                     ring: root.accent
                     fontFamily: root.fontFamily
                     onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
@@ -2097,7 +2253,7 @@ Item {
                   look: modelData
                   label: Palette.pretty(modelData.id)
                   image: modelData.image || ""
-                  chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.selectedTerm.look)
+                  chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
                   ring: root.accent
                   fontFamily: root.fontFamily
                   onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }

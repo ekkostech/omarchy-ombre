@@ -156,6 +156,15 @@ function tintLook(id) {
 
 // Only the fields worth saving, validated; anything else is no look.
 function normalizeLook(look) {
+  if (look && look.kind === "layers") {
+    // Only base looks may be nested; saved state cannot grow recursive layers.
+    var text = look.text && look.text.kind !== "layers" ? normalizeLook(look.text) : null;
+    if (text && text.kind === "tint") text = null;
+    var background = look.background && look.background.kind !== "layers" ? normalizeLook(look.background) : null;
+    var foreground = isHex(look.foreground) ? look.foreground.toLowerCase() : "";
+    if (!text && !background && !foreground) return null;
+    return { kind: "layers", id: "custom", text: text, background: background, foreground: foreground };
+  }
   if (!look || typeof look !== "object") return null;
   if (look.kind === "tint") return tintLook(look.id);
   if ((look.kind === "mood" || look.kind === "theme") && isName(look.id) && validPalette(look.palette)) {
@@ -168,11 +177,13 @@ function normalizeLook(look) {
 
 function sameLook(a, b) {
   if (!a || !b) return !a && !b;
+  if (a.kind === "layers" || b.kind === "layers") return JSON.stringify(normalizeLook(a)) === JSON.stringify(normalizeLook(b));
   return a.kind === b.kind && a.id === b.id && (a.kind !== "mood" || a.source === b.source);
 }
 
 function lookBackground(look, themeBackground) {
   if (!look) return "";
+  if (look.kind === "layers") return lookBackground(look.background, themeBackground);
   if (look.kind === "tint") {
     if (isHex(look.id)) return look.id;
     var h = hue(look.id);
@@ -189,6 +200,7 @@ function inactiveAccent(accent, themeBackground) {
 
 function lookAccent(look) {
   if (!look) return "";
+  if (look.kind === "layers") return lookAccent(look.text) || lookAccent(look.background) || look.foreground;
   if (look.kind === "tint") return isHex(look.id) ? look.id : hue(look.id).hex;
   return look.palette.accent;
 }
@@ -206,9 +218,52 @@ function basename(path) {
 
 function lookLabel(look) {
   if (!look) return "";
+  if (look.kind === "layers") return textLabel(look) + " / " + backgroundLabel(look);
   if (look.kind === "tint") return hue(look.id) ? hue(look.id).name : look.id;
   if (look.kind === "mood") return pretty(look.id) + " · " + basename(look.source);
   return pretty(look.id);
+}
+
+// Text and background are independent. Legacy looks still load unchanged.
+function textLook(look) {
+  if (!look) return null;
+  return look.kind === "layers" ? look.text : look.kind === "tint" ? null : look;
+}
+function backgroundLook(look) { return look && look.kind === "layers" ? look.background : look; }
+function textLabel(look) {
+  var t = textLook(look);
+  return look && look.foreground ? look.foreground : t ? pretty(t.id) : "Terminal default";
+}
+function backgroundLabel(look) {
+  var b = backgroundLook(look);
+  return b ? (b.kind === "tint" ? lookLabel(b) : pretty(b.id)) : "Terminal default";
+}
+function layerLook(current, incoming, scope) {
+  incoming = normalizeLook(incoming);
+  if (scope === "all") return incoming;
+  return normalizeLook({ kind: "layers", text: scope === "text" ? textLook(incoming) : textLook(current),
+    background: scope === "background" ? backgroundLook(incoming) : backgroundLook(current),
+    foreground: scope === "text" ? "" : current && current.foreground });
+}
+function foregroundLook(current, color) {
+  return normalizeLook({ kind: "layers", text: textLook(current), background: backgroundLook(current), foreground: color });
+}
+function lookForeground(look) {
+  var t = textLook(look);
+  return (look && look.foreground) || (t ? t.palette.foreground : "");
+}
+// Persist colors alongside the wallpaper in Ghostty's per-window config. A config
+// reload then preserves the look without depending on a timed OSC replay.
+function ghosttyColors(look, themeBackground) {
+  var t = textLook(look), lines = [];
+  if (t) {
+    for (var i = 0; i < 16; i++) lines.push("palette=" + i + "=" + t.palette.colors[i].slice(1));
+    lines.push("cursor-color=" + t.palette.cursor.slice(1));
+  }
+  var fg = lookForeground(look), bg = lookBackground(look, themeBackground);
+  if (fg) lines.push("foreground=" + fg.slice(1));
+  if (bg) lines.push("background=" + bg.slice(1));
+  return lines.join(";") || "-";
 }
 
 // ---- Wallpapers (Ghostty only) ----------------------------------------------
@@ -248,12 +303,14 @@ var ESC = "\u001b";
 function osc(body) { return ESC + "]" + body + ESC + "\\"; }
 
 function sequence(look, themeBackground) {
-  var reset = osc("104") + osc("110") + osc("112");
-  if (!look) return reset + osc("111");
-  if (look.kind === "tint") return reset + osc("11;" + lookBackground(look, themeBackground));
-  var p = look.palette, out = "";
-  for (var i = 0; i < 16; i++) out += osc("4;" + i + ";" + p.colors[i]);
-  return out + osc("10;" + p.foreground) + osc("11;" + p.background) + osc("12;" + p.cursor);
+  if (!look) return osc("104") + osc("110") + osc("112") + osc("111");
+  var t = textLook(look), out = "";
+  if (t) {
+    for (var i = 0; i < 16; i++) out += osc("4;" + i + ";" + t.palette.colors[i]);
+    out += osc("12;" + t.palette.cursor);
+  } else out = osc("104") + osc("112");
+  var fg = lookForeground(look), bg = lookBackground(look, themeBackground);
+  return out + (fg ? osc("10;" + fg) : osc("110")) + (bg ? osc("11;" + bg) : osc("111"));
 }
 
 // ---- Needs-you pulse ----------------------------------------------------------
