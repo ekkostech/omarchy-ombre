@@ -89,18 +89,23 @@ function mostChromatic(list) {
 
 function validPalette(p) {
   if (!p || !isHex(p.background) || !isHex(p.foreground) || !isHex(p.cursor) || !isHex(p.accent)) return false;
-  if (!Array.isArray(p.colors) || p.colors.length !== 16) return false;
+  // Repeater modelData exposes nested arrays as Qt sequence objects. They
+  // support indexed access but Array.isArray returns false. Validate the
+  // shape and every entry, then copy into an ordinary JS array below.
+  if (!p.colors || typeof p.colors !== "object" || p.colors.length !== 16) return false;
   for (var i = 0; i < 16; i++) if (!isHex(p.colors[i])) return false;
   return true;
 }
 
 function copyPalette(p) {
+  var colors = [];
+  for (var i = 0; i < 16; i++) colors.push(String(p.colors[i]).toLowerCase());
   return {
     background: p.background.toLowerCase(),
     foreground: p.foreground.toLowerCase(),
     cursor: p.cursor.toLowerCase(),
     accent: p.accent.toLowerCase(),
-    colors: p.colors.map(function (c) { return c.toLowerCase(); })
+    colors: colors
   };
 }
 
