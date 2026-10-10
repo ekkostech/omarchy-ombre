@@ -43,6 +43,9 @@ Item {
   property bool solid: true
   property var solidOriginal: ({})
   property bool solidLoaded: false
+  property var agentThemeStatus: ({ linked: false, canUnlink: false, errors: [] })
+  property string agentThemeMessage: ""
+  property string agentThemeAction: "status"
   property bool textShadow: false
   property var hiddenSources: []     // wallpaper paths hidden from the strips (files untouched)
   property bool showHidden: false
@@ -174,6 +177,7 @@ Item {
     root.focusOnScan = true
     root.hoverText = ""
     root.setupMessage = ""
+    root.checkAgentThemes("status")
     root.scan()
     // The catalog is cheap but forks a process per theme, so refresh it at most
     // once a minute; a theme change refreshes it right away.
@@ -245,6 +249,32 @@ Item {
       ghostty: root.catalog.ghostty,
       launcher: root.catalog.launcher
     })
+  }
+
+  // Native themes use terminal palette references, so every window can keep
+  // its own mood. Linking is one-time; palette changes need no app-file writes.
+  function setAgentThemes(enabled) {
+    return root.checkAgentThemes(enabled === true || enabled === "true" ? "link" : "unlink")
+  }
+
+  function checkAgentThemes(action) {
+    if (agentThemeProc.running) return "busy"
+    root.agentThemeAction = action
+    root.agentThemeMessage = action === "link" ? "Linking app themes…" : action === "unlink" ? "Restoring previous app themes…" : ""
+    agentThemeProc.command = ["python3", root.pluginDir + "/bin/ombre-sync-agent-themes", action]
+    agentThemeProc.running = true
+    return "ok"
+  }
+
+  function onAgentThemes(output) {
+    try {
+      var status = JSON.parse(output)
+      root.agentThemeStatus = status
+      root.agentThemeMessage = status.errors && status.errors.length ? status.errors.join(" · ")
+        : root.agentThemeAction === "unlink" ? "Previous app themes restored. Open /theme in running sessions to select them."
+        : status.linked ? "Linked. In running Claude and Codex sessions, select Ombre in /theme once. Then moods follow live."
+        : "Link once to make Claude’s interface and Codex’s code colors follow each terminal."
+    } catch (e) { root.agentThemeMessage = "Could not read app theme settings." }
   }
 
   function setBorders(enabled) {
@@ -1217,6 +1247,15 @@ Item {
   Timer { id: restartWriter; interval: 1000; onTriggered: writer.running = true }
 
   Process {
+    id: agentThemeProc
+    stdout: StdioCollector { onStreamFinished: root.onAgentThemes(text) }
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode !== 0 && !root.agentThemeStatus.errors.length)
+        root.agentThemeMessage = "Could not link app themes. Check that Python 3.11 or newer is installed."
+    }
+  }
+
+  Process {
     id: scanner
     command: ["sh", "-c", root.scanScript, "sh", root.runtimeDir]
     stdout: StdioCollector { onStreamFinished: root.onScan(text) }
@@ -2033,6 +2072,40 @@ Item {
                   }
                 }
               }
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(5)
+            Row {
+              spacing: Style.space(10)
+              Text {
+                text: "Claude + Codex"
+                color: root.text
+                font.bold: true
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                anchors.verticalCenter: parent.verticalCenter
+              }
+              TextButton {
+                label: agentThemeProc.running ? "Checking…" : root.agentThemeStatus.linked ? "Linked to Ombre" : "Link app themes"
+                chosen: root.agentThemeStatus.linked
+                onActivated: root.setAgentThemes(true)
+              }
+              TextButton {
+                visible: root.agentThemeStatus.canUnlink
+                label: "Unlink"
+                onActivated: root.setAgentThemes(false)
+              }
+            }
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: root.agentThemeMessage || "Each window keeps its own mood. Select Ombre once in each app’s /theme picker."
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
             }
           }
 

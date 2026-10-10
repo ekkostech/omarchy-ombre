@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Link native agent themes to each terminal's live ANSI palette.
+
+Claude: documented ansi:<name> custom-theme values.
+Codex: syntect/bat alpha markers, supported by Codex 0.162.1:
+  #NN000000 = ANSI slot NN; #00000001 = terminal default.
+No palettes are shared between windows and no running agents are restarted.
+"""
+import argparse
+import copy
+import fcntl
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import sys
+import tempfile
+import tomllib
+
+SLUG = "ombre"
+
+def claude_theme():
+    slots = {
+        "text": "whiteBright", "inverseText": "black", "inactive": "white",
+        "inactiveShimmer": "whiteBright", "subtle": "blackBright",
+        "claude": "magenta", "claudeShimmer": "magentaBright",
+        "suggestion": "cyan", "permission": "blue", "permissionShimmer": "blueBright",
+        "remember": "yellow", "success": "green", "error": "red", "warning": "yellow",
+        "warningShimmer": "yellowBright", "merged": "magenta", "promptBorder": "blue",
+        "promptBorderShimmer": "blueBright", "planMode": "cyan", "autoAccept": "yellow",
+        "bashBorder": "yellowBright", "ide": "cyanBright", "fastMode": "yellow",
+        "fastModeShimmer": "yellowBright", "effortUltra": "magentaBright",
+        "rate_limit_fill": "blue", "rate_limit_empty": "blackBright",
+        "briefLabelYou": "yellow", "briefLabelClaude": "magenta",
+        "userMessageBackground": "black", "userMessageBackgroundHover": "blackBright",
+        "bashMessageBackgroundColor": "black", "memoryBackgroundColor": "black",
+        "selectionBg": "blue", "diffAdded": "black", "diffRemoved": "black",
+        "diffAddedDimmed": "black", "diffRemovedDimmed": "black",
+        "diffAddedWord": "green", "diffRemovedWord": "red",
+    }
+    for name, slot in {"red": "red", "blue": "blue", "green": "green", "yellow": "yellow",
+                       "purple": "magenta", "orange": "yellowBright", "pink": "magentaBright", "cyan": "cyan"}.items():
+        slots[name + "_FOR_SUBAGENTS_ONLY"] = slot
+    return {"name": "Ombre · follows this terminal", "base": "dark-ansi",
+            "overrides": {key: "ansi:" + value for key, value in slots.items()}}
+
+def codex_theme():
+    def ansi(slot):
+        return f"#{slot:02x}000000"
+    default = "#00000001"
+    scopes = [
+        ("comment, punctuation.definition.comment", 8),
+        ("string", 2), ("constant.numeric, constant.language, constant.character", 3),
+        ("keyword, storage", 5), ("entity.name.function, support.function", 4),
+        ("entity.name.type, entity.name.class, support.type, support.class", 6),
+        ("variable, entity.other.attribute-name", 1),
+        ("constant.other, support.constant", 3),
+        ("markup.heading", 4), ("markup.underline.link, string.other.link", 6),
+        ("markup.inline.raw, markup.raw", 2),
+        ("invalid", 1),
+    ]
+    settings = [{"settings": {"foreground": default, "background": default,
+                              "caret": ansi(4), "selection": ansi(4)}}]
+    settings += [{"scope": scope, "settings": {"foreground": ansi(slot)}} for scope, slot in scopes]
+    settings += [{"scope": scope, "settings": {"foreground": ansi(slot), "background": default}}
+                 for scope, slot in [("markup.inserted, diff.inserted", 2), ("markup.deleted, diff.deleted", 1),
+                                     ("markup.changed, diff.changed", 3)]]
+    settings += [{"scope": "markup.bold", "settings": {"fontStyle": "bold"}}]
+    return {"name": "Ombre · follows this terminal", "settings": settings}
+
+def read(path):
+    return path.read_bytes() if path.exists() else None
+
+def atomic(path, data, expected):
+    """Refuse a concurrent change rather than overwrite it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if read(path) != expected:
+        raise ValueError(f"{path.name} changed while linking; retry")
+    fd, name = tempfile.mkstemp(prefix=".ombre-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+        if read(path) != expected:
+            raise ValueError(f"{path.name} changed while linking; retry")
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+def json_bytes(value):
+    return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode()
+
+def toml_theme(data, value):
+    """Surgically edit conventional TOML, validating that ONLY tui.theme changed.
+
+    Complex inline/dotted tables fail closed instead of rewriting other settings.
+    """
+    text = (data or b"").decode()
+    before = tomllib.loads(text)
+    expected = copy.deepcopy(before)
+    tui = expected.setdefault("tui", {})
+    if not isinstance(tui, dict):
+        raise ValueError("Codex tui must be a table")
+    if value is None:
+        tui.pop("theme", None)
+    else:
+        tui["theme"] = value
+    lines = text.splitlines(keepends=True)
+    headers = [i for i, line in enumerate(lines) if re.match(r'^\s*\[', line)]
+    start = next((i for i in headers if re.match(r'^\s*\[\s*(?:tui|"tui"|\x27tui\x27)\s*\]\s*(?:#.*)?$', lines[i].strip())), None)
+    if start is None:
+        if "tui" in before:
+            raise ValueError("Codex uses a dotted/inline tui table; select Ombre with /theme")
+        if value is None:
+            return data or b""
+        text = text.rstrip("\n") + '\n\n[tui]\ntheme = ' + json.dumps(value) + '\n'
+    else:
+        end = next((i for i in headers if i > start), len(lines))
+        matches = [i for i in range(start + 1, end) if re.match(r'^\s*(?:theme|"theme"|\x27theme\x27)\s*=', lines[i])]
+        if len(matches) > 1:
+            raise ValueError("Duplicate Codex theme setting")
+        replacement = "" if value is None else "theme = " + json.dumps(value) + "\n"
+        if matches:
+            lines[matches[0]] = replacement
+        elif value is not None:
+            lines.insert(start + 1, replacement)
+        text = "".join(lines)
+    if tomllib.loads(text) != expected:
+        raise ValueError("Cannot safely change only Codex tui.theme; select Ombre with /theme")
+    return text.encode()
+
+def paths():
+    home = Path.home()
+    claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude")
+    codex = Path(os.environ.get("CODEX_HOME") or home / ".codex")
+    state = Path(os.environ.get("XDG_STATE_HOME") or home / ".local/state") / "ombre/agent-themes"
+    return {
+        "claude": (claude / "settings.json", claude / "themes/ombre.json", json_bytes(claude_theme()), "custom:ombre"),
+        "codex": (codex / "config.toml", codex / "themes/ombre.tmTheme", plistlib.dumps(codex_theme()), "ombre"),
+    }, state
+
+def preference(app, raw):
+    if app == "claude":
+        return json.loads(raw or b"{}").get("theme")
+    return tomllib.loads((raw or b"").decode()).get("tui", {}).get("theme")
+
+def set_preference(app, raw, value):
+    if app == "codex":
+        return toml_theme(raw, value)
+    obj = json.loads(raw or b"{}")
+    if value is None:
+        obj.pop("theme", None)
+    else:
+        obj["theme"] = value
+    return json_bytes(obj)
+
+def run(action):
+    targets, state_dir = paths()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state_path = state_dir / "preferences.json"
+        saved = json.loads(read(state_path) or b"{}")
+        errors = []
+        for app, (config, theme, content, selected) in targets.items():
+            try:
+                if action == "link":
+                    raw = read(config)
+                    previous = preference(app, raw)
+                    updated = set_preference(app, raw, selected)
+                    old_theme = read(theme)
+                    if old_theme is not None and old_theme != content and app not in saved:
+                        raise ValueError("An existing custom Ombre theme is not managed by this link")
+                    if app not in saved:
+                        saved[app] = {"previous": previous}
+                        atomic(state_path, json_bytes(saved), read(state_path))
+                    if old_theme != content:
+                        atomic(theme, content, old_theme)
+                    if raw != updated:
+                        atomic(config, updated, raw)
+                elif action == "unlink" and app in saved:
+                    raw = read(config)
+                    if preference(app, raw) == selected:
+                        atomic(config, set_preference(app, raw, saved[app]["previous"]), raw)
+                    del saved[app]
+                    atomic(state_path, json_bytes(saved), read(state_path))
+            except (ValueError, OSError, TypeError) as exc:
+                errors.append(f"{app}: {exc}")
+        result = {"errors": errors}
+        for app, (config, theme, content, selected) in targets.items():
+            try:
+                result[app] = {"linked": preference(app, read(config)) == selected and read(theme) == content,
+                               "installed": theme.exists()}
+            except (ValueError, OSError, TypeError):
+                result[app] = {"linked": False, "installed": theme.exists()}
+        result["linked"] = all(result[app]["linked"] for app in targets)
+        result["canUnlink"] = bool(saved)
+        return result
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["status", "link", "unlink"])
+    args = parser.parse_args()
+    try:
+        result = run(args.action)
+        print(json.dumps(result))
+        sys.exit(1 if result["errors"] else 0)
+    except (ValueError, OSError) as exc:
+        print(json.dumps({"linked": False, "errors": [str(exc)]}))
+        sys.exit(1)
