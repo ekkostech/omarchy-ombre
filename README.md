@@ -1,6 +1,6 @@
 # Ombre
 
-![Ombre](banner.jpg)
+![Ombre — terminal colors and backgrounds](assets/promo/ombre-hero-v2.png)
 
 *Om-bray.* An ombre shades one colour into another; this shades each of your Omarchy terminals its own way.
 
@@ -15,6 +15,10 @@ That's handy when a handful of coding agents are going at once.
 > feature, so that part needs Ghostty as your terminal
 > (`omarchy install terminal ghostty`) and a one-time setup from the picker.
 > The plugin says so in a notification the first time it loads.
+
+![The actual Ombre picker with live terminal previews, independent text and background controls, and Aether mood palettes](preview.png)
+
+*The real Ombre picker, captured with four demo terminals. Select a terminal, preview a mood, and apply text colors and backgrounds together or separately.*
 
 ![Four agents, four looks: Tokyo Night with its wallpaper, an Aether mood over the Kanagawa wave, Gruvbox with its wallpaper, and a plain purple tint](preview.jpg)
 
