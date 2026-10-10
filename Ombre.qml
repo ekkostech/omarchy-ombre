@@ -276,13 +276,18 @@ Item {
     return "ok"
   }
 
-  function applySolid(list) {
-    if (!root.solid || !root.solidLoaded || !root.configLoaded || solidReader.running) return
-    var fresh = []
-    for (var i = 0; i < list.length; i++)
-      if (list[i].ghostty && /^[0-9a-f]+$/.test(list[i].address || "") && !root.solidOriginal[list[i].address]) fresh.push(list[i].address)
-    if (fresh.length === 0) return
-    solidReader.command = ["sh", "-c", 'for a; do printf "%s %s %s\\n" "$a" "$(hyprctl getprop "address:0x$a" opacity 2>/dev/null | head -n1)" "$(hyprctl getprop "address:0x$a" opacity_inactive 2>/dev/null | head -n1)"; done', "sh"].concat(fresh)
+  // Every window drawn by Ghostty counts, whatever its class (Omarchy's agent windows are
+  // Ghostty too) and even when Ombre can't style it, so windows are listed from Hyprland
+  // and kept when their process is ghostty.
+  function applySolid() {
+    if (!root.solid || !root.solidLoaded || !root.configLoaded) return
+    if (solidReader.running) { solidLater.restart(); return }
+    solidReader.command = ["sh", "-c",
+      'hyprctl clients | awk \'/^Window /{a=$2} /^\\tpid: /{print a, $2}\' | while read -r a pid; do\n'
+      + '  [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ghostty ] || continue\n'
+      + '  case " $* " in *" $a "*) continue ;; esac\n'
+      + '  printf "%s %s %s\\n" "$a" "$(hyprctl getprop "address:0x$a" opacity 2>/dev/null | head -n1)" "$(hyprctl getprop "address:0x$a" opacity_inactive 2>/dev/null | head -n1)"\n'
+      + 'done', "sh"].concat(Object.keys(root.solidOriginal))
     solidReader.running = true
   }
 
@@ -459,7 +464,7 @@ Item {
     }
     root.applyProjects(list)
     root.applyDefaults(list)
-    root.applySolid(list)
+    root.applySolid()
     if (root.reshadowAll) {
       root.reshadowAll = false
       for (var r = 0; r < list.length; r++)
@@ -919,7 +924,7 @@ Item {
       else if (root.repaintAll) root.paintBorder(list[i], null)
     }
     root.repaintAll = false
-    root.applySolid(list)
+    root.applySolid()
     root.markSeen(list)
     if (root.opened) root.terminals = list
   }
@@ -1207,6 +1212,7 @@ Item {
 
   Process { id: configWriter }
   Process { id: solidWriter }
+  Timer { id: solidLater; interval: 400; onTriggered: root.applySolid() }
   Process {
     id: solidReader
     stdout: StdioCollector { onStreamFinished: root.onSolidRead(text) }
@@ -1280,6 +1286,7 @@ Item {
         break
       case "urgent": root.requestPulse(data); break
       case "openwindow":
+        if (root.solid) solidLater.restart()
         // A window can take seconds to start its shell; keep looking until it
         // shows up in a scan.
         if (root.newDefault.mode !== "none" || root.textShadow || root.solid || root.projects.length > 0) {
