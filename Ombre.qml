@@ -33,6 +33,8 @@ Item {
 
   // Settings kept in ~/.config/omarchy/ombre.json.
   property bool borders: true
+  // The theme's own border colors, put back on a window when it has no look (see Palette.borderCommand).
+  property var themeBorders: ({ active: "", inactive: "" })
   property bool pulse: true
   // Ghostty windows fully opaque, so Omarchy's slight transparency doesn't let the desktop
   // show through a terminal's wallpaper. solidOriginal keeps each window's own values.
@@ -575,7 +577,7 @@ Item {
     if (!term.address) return
     var color = root.borders ? Palette.lookAccent(look) : ""
     Hyprland.dispatch(Palette.borderPair(term.address, color, "ff",
-      Palette.inactiveAccent(color, root.themeBackground), "ff"))
+      Palette.inactiveAccent(color, root.themeBackground), "ff", root.themeBorders))
   }
 
   function persist(term) {
@@ -990,7 +992,7 @@ Item {
         var ends = Palette.pulseEnds(p.color, root.themeBackground)
         c = root.pulsePhase ? ends.bright : ends.dim
       } else c = Palette.pulseColor(p.color, root.themeBackground, now - p.started)
-      Hyprland.dispatch(Palette.borderPair(addr, c, "ff", c, "ff"))
+      Hyprland.dispatch(Palette.borderPair(addr, c, "ff", c, "ff", root.themeBorders))
     }
   }
 
@@ -1240,6 +1242,18 @@ Item {
   Timer { interval: root.borderAnimated ? Palette.PULSE_PERIOD_MS / 2 : 125; repeat: true; running: root.pulsing; triggeredOnStart: true; onTriggered: root.onPulseTick() }
 
   Process {
+    id: borderProbe
+    command: ["sh", "-c", "hyprctl -j getoption general:col.active_border; printf '\\n@@\\n'; hyprctl -j getoption general:col.inactive_border"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var halves = String(text).split("@@")
+        var active = Palette.themeGradient(halves[0]), inactive = Palette.themeGradient(halves[1] || "")
+        if (active || inactive) root.themeBorders = { active: active, inactive: inactive }
+      }
+    }
+  }
+
+  Process {
     id: animProbe
     running: true
     command: ["sh", "-c", "hyprctl animations -j 2>/dev/null | jq -r '.[0][] | select(.name==\"border\") | .enabled' 2>/dev/null"]
@@ -1260,7 +1274,7 @@ Item {
 
   Connections {
     target: Color
-    function onBackgroundChanged() { reapplyLater.restart(); root.loadCatalog() }
+    function onBackgroundChanged() { borderProbe.running = true; reapplyLater.restart(); root.loadCatalog() }
   }
 
   Connections {
@@ -1268,7 +1282,7 @@ Item {
     function onRawEvent(event) {
       var data = String(event.data || "").trim()
       switch (event.name) {
-      case "configreloaded": reapplyLater.restart(); break
+      case "configreloaded": borderProbe.running = true; reapplyLater.restart(); break
       case "activewindowv2": root.activeAddress = data; root.stopPulse(data); break
       case "closewindow":
         root.dropPulse(data)
@@ -1305,7 +1319,7 @@ Item {
     }
   }
 
-  Component.onCompleted: root.loadCatalog()
+  Component.onCompleted: { borderProbe.running = true; root.loadCatalog() }
 
   // Shutting down mid-pulse would leave a pulse color on the border.
   Component.onDestruction: {

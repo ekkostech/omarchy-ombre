@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.2 — 2026-10-10
+- Borders come back. To put a window's border back to the theme, Ombre sent Hyprland `-1`, which Hyprland 0.56 treats as an empty colour: every terminal without a look lost its focus border and its fade. Ombre now reads the theme's border colours from Hyprland (again after each config reload) and sets those explicitly.
+
 ## 1.4.1 — 2026-10-10
 - Moods look like moods again on dark themes. Aether keeps every mood's background near black, so on a black Omarchy theme Fire, Ocean and Forest looked the same in plain text. A mood's window background now takes 20% of its accent colour and its text 15%, the way a tint takes a hue: Fire reads warm, Ocean blue, Vaporwave magenta. The ANSI colours are unchanged.
 

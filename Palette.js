@@ -285,11 +285,27 @@ function pulseColor(accent, themeBackground, elapsedMs) {
   return mix(dim, bright, t);
 }
 
-// Hyprland's Lua dispatcher: set or clear a per-window property.
-function borderCommand(prop, address, color, alpha) {
-  var v = color ? JSON.stringify("rgba(" + color.replace(/^#/, "") + alpha + ")") : "-1";
+// Hyprland's Lua dispatcher: set a per-window property. Hyprland 0.56 has no way to
+// unset a window's border color (-1 empties it, leaving no border at all), so "no
+// color" sets the theme's own border back, read from `hyprctl getoption`.
+function borderCommand(prop, address, color, alpha, fallback) {
+  var v = color ? JSON.stringify("rgba(" + color.replace(/^#/, "") + alpha + ")") : fallback ? JSON.stringify(fallback) : "-1";
   return "hl.dsp.window.set_prop({ prop = " + JSON.stringify(prop)
     + ", value = " + v + ", window = " + JSON.stringify("address:0x" + address) + " })";
+}
+
+// A gradient as `hyprctl -j getoption general:col.active_border` reports it
+// ("ff788fff 0deg", colors as aarrggbb) in the form set_prop accepts ("rgba(788fffff) 0deg").
+function themeGradient(text) {
+  var g = "";
+  try { g = String(JSON.parse(String(text || "").trim()).gradient || ""); } catch (e) { var m = String(text || "").match(/gradient data:\s*([^\n]+)/); g = m ? m[1] : ""; }
+  var parts = g.trim().split(/\s+/), out = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (/^[0-9a-f]{8}$/i.test(parts[i])) out.push("rgba(" + parts[i].slice(2) + parts[i].slice(0, 2) + ")");
+    else if (/^-?\d+deg$/.test(parts[i])) out.push(parts[i]);
+    else return "";
+  }
+  return out.length && /^rgba/.test(out[0]) ? out.join(" ") : "";
 }
 
 // Both window opacities in one Hyprland call (Omarchy's rule dims every window a little;
@@ -303,9 +319,10 @@ function opacityPair(address, active, inactive) {
 
 // Both border colors in one Hyprland call, so they can't be applied out of
 // order with another update to the same window.
-function borderPair(address, active, activeAlpha, inactive, inactiveAlpha) {
-  return "function() hl.dispatch(" + borderCommand("active_border_color", address, active, activeAlpha)
-    + ") hl.dispatch(" + borderCommand("inactive_border_color", address, inactive, inactiveAlpha) + ") end";
+function borderPair(address, active, activeAlpha, inactive, inactiveAlpha, theme) {
+  var t = theme || {};
+  return "function() hl.dispatch(" + borderCommand("active_border_color", address, active, activeAlpha, t.active)
+    + ") hl.dispatch(" + borderCommand("inactive_border_color", address, inactive, inactiveAlpha, t.inactive) + ") end";
 }
 
 // ---- Parsing shell output ---------------------------------------------------

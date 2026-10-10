@@ -11,7 +11,7 @@ const P = {};
 vm.runInNewContext(src + "\n" + [
   "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
   "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper",
-  "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "isImagePath", "themePalette", "parseToml"
+  "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "themeGradient", "borderPair", "isImagePath", "themePalette", "parseToml"
 ].map((n) => `P.${n} = ${n};`).join("\n"), { P, JSON, Math });
 
 test("tints mix into the theme background and stay dark on dark themes", () => {
@@ -113,4 +113,16 @@ test("a mood's background and text carry its accent so moods differ on black the
   const [or, og, ob] = [1, 3, 5].map((i) => parseInt(ocean.background.slice(i, i + 2), 16));
   assert.ok(ob > or, "ocean is blue: " + ocean.background);
   assert.ok(P.isLight(fire.foreground) && !P.isLight(fire.background));
+});
+
+test("no look puts the theme's border back instead of emptying it", () => {
+  assert.equal(P.themeGradient('{"option": "general:col.active_border", "gradient": "ff788fff 0deg", "set": true }'), "rgba(788fffff) 0deg");
+  assert.equal(P.themeGradient("gradient data: ee33ccff ee00ff99 45deg\nset: true"), "rgba(33ccffee) rgba(00ff99ee) 45deg");
+  assert.equal(P.themeGradient("nonsense"), "");
+  const theme = { active: "rgba(788fffff) 0deg", inactive: "rgba(595959aa) 0deg" };
+  const back = P.borderPair("ab12", "", "ff", "", "ff", theme);
+  assert.ok(back.includes('prop = "active_border_color", value = "rgba(788fffff) 0deg"'));
+  assert.ok(back.includes('prop = "inactive_border_color", value = "rgba(595959aa) 0deg"'));
+  assert.ok(!back.includes("-1"));
+  assert.ok(P.borderPair("ab12", "#3e63dd", "ff", "#1a2a5a", "ff", theme).includes('value = "rgba(3e63ddff)"'));
 });
