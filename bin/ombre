@@ -11,8 +11,9 @@
 #   ombre mood:fire            an Aether mood from the current wallpaper
 #   ombre mood:ocean@/path/to/wallpaper.jpg
 #   ombre theme:tokyo-night    any installed Omarchy theme
-#   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15]  Ghostty only
+#   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15] [--blur 12]  Ghostty only
 #   ombre wallpaper none       remove the focused terminal's wallpaper
+#   ombre blur 12             blur the current wallpaper (0–40; 0 is off)
 #   ombre setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
 #   ombre hide /path/to/wallpaper.jpg   hide a wallpaper from the picker's strips (file untouched); 'unhide' or 'unhide all'
 #   ombre borders on|off       follow the look with the window border
@@ -87,6 +88,9 @@ case ${1:-} in
     exit ;;
   --saved)
     omarchy-shell shell call "$id" looks "" | jq -r '.saved[] | "\(if .favorite then "★" else "☆" end) \(.name)"'; exit ;;
+  blur)
+    [[ ${2:-} =~ ^[0-9]+$ ]] && ((10#$2 <= 40)) || usage 1
+    set -- "blur:$2" "${@:3}" ;;
   save|look)
     [[ -n ${2:-} ]] || usage 1
     if [[ $1 == save ]]; then set -- "save:$2" "${@:3}"
@@ -116,10 +120,10 @@ case ${1:-} in
     case ${2:-} in
       from) set -- "project:from" "${@:3}" ;;
       set)
-        path=$(readlink -f "${3:?project set needs a path}"); look=""; wp=""; st=""; shift 3
+        path=$(readlink -f "${3:?project set needs a path}"); look=""; wp=""; st=""; bl=""; shift 3
         [[ ${1:-} && $1 != --* ]] && { look=$1; shift; }
-        while (($#)); do case $1 in --wallpaper) wp=$(readlink -f "$2"); shift 2 ;; --strength) st=$2; shift 2 ;; *) usage 1 ;; esac; done
-        call defineProject "$(jq -cn --arg p "$path" --arg l "$look" --arg w "$wp" --arg s "$st" '{path: $p} + (if $l == "" then {} else {look: $l} end) + (if $w == "" then {} else {wallpaper: $w} end) + (if $s == "" then {} else {strength: ($s|tonumber)} end)')"
+        while (($#)); do case $1 in --wallpaper) wp=$(readlink -f "$2"); shift 2 ;; --strength) st=$2; shift 2 ;; --blur) bl=$2; shift 2 ;; *) usage 1 ;; esac; done
+        call defineProject "$(jq -cn --arg p "$path" --arg l "$look" --arg w "$wp" --arg s "$st" --arg b "$bl" '{path: $p} + (if $l == "" then {} else {look: $l} end) + (if $w == "" then {} else {wallpaper: $w} end) + (if $s == "" then {} else {strength: ($s|tonumber)} end) + (if $b == "" then {} else {blur: ($b|tonumber)} end)')"
         exit ;;
       list) omarchy-shell shell call "$id" looks "" | jq -r '.projects[] | "\(.path)\t\(.look)"'; exit ;;
       remove) [[ -n ${3:-} ]] || usage 1; call apply "$(jq -cn --arg v "project:remove:$(readlink -f "$3")" '{value: $v}')"; exit ;;
@@ -149,8 +153,10 @@ esac
 value=$1; shift
 target=focused
 strength=""
+blur=""
 while (($#)); do
   case $1 in
+    --blur) blur="${2:?--blur needs an amount from 0 to 40}"; shift 2 ;;
     --strength) strength="${2:?--strength needs a number from 0.01 to 1 (soft is 0.08)}"; shift 2 ;;
     --title) target="title:${2:?--title needs text}"; shift 2 ;;
     --workspace) target="workspace:${2:?--workspace needs a workspace name or number}"; shift 2 ;;
@@ -161,5 +167,5 @@ while (($#)); do
   esac
 done
 
-call apply "$(jq -cn --arg value "$value" --arg target "$target" --arg strength "$strength" \
-  '{value: $value, target: $target} + (if $strength == "" then {} else {strength: ($strength | tonumber)} end)')"
+call apply "$(jq -cn --arg value "$value" --arg target "$target" --arg strength "$strength" --arg blur "$blur" \
+  '{value: $value, target: $target} + (if $strength == "" then {} else {strength: ($strength | tonumber)} end) + (if $blur == "" then {} else {blur: ($blur | tonumber)} end)')"

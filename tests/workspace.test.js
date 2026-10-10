@@ -18,8 +18,9 @@ const term = (id, extras = {}) => ({pid:String(id), pty:`pts/${id}`, address:`a$
 
 test('saved looks round-trip complete layers, custom foreground, wallpaper and strength', () => {
   const look = P.foregroundLook(P.tintLook('blue'), '#eeccaa');
-  const saved = W.library([{name:'  Deep Ocean  ', look, wallpaper:{path:'/a/ocean.png',strength:0.15}, favorite:true}]);
+  const saved = W.library([{name:'  Deep Ocean  ', look, wallpaper:{path:'/a/ocean.png',strength:0.15,blur:18}, favorite:true}]);
   assert.equal(saved[0].name, 'Deep Ocean');
+  assert.equal(saved[0].wallpaper.blur,18);
   assert.equal(P.lookForeground(saved[0].look), '#eeccaa');
   assert.equal(P.backgroundLook(saved[0].look).id, 'blue');
   assert.deepEqual(plain(W.library(plain(saved))), plain(saved));

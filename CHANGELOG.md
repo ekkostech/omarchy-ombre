@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 — 2026-10-10
+- Adjustable wallpaper blur from Off to 40, with a slider and reset control in Wallpapers. Text remains sharp and original image files are never modified.
+- Blur follows saved looks, project/default rules, batch styling, undo and redo. The CLI supports `ombre blur AMOUNT` and `--blur` when choosing wallpapers.
+- Private cached image rendering uses python-pillow; failed rendering leaves the current Ghostty configuration intact and displays an error.
+
 ## 1.5.0 — 2026-10-10
 - Named saved looks preserve exact text and background colours, wallpaper and strength; star favourites for quick access, rename and update saved looks.
 - Undo and redo changes separately for each terminal, including combined palette/wallpaper changes. Hover previews and automatic project/default rules stay out of history.

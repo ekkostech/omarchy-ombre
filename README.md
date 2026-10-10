@@ -16,6 +16,8 @@ That's handy when a handful of coding agents are going at once.
 > (`omarchy install terminal ghostty`) and a one-time setup from the picker.
 > The plugin says so in a notification the first time it loads.
 
+![The actual Ombre 1.6 wallpaper controls with adjustable blur and reset](assets/screenshots/wallpaper-blur-1.6.png)
+
 ![The actual Ombre 1.5 picker with saved looks, favourites, terminal search, batch selection and undo controls](preview.png)
 
 *The real Ombre 1.5 picker, captured with four demo terminals and saved favourites. Search, select several cards, and reuse a complete look.*
@@ -31,6 +33,7 @@ mood or theme to try it on the real window, click to keep it.
 
 ## Features
 
+- **Adjustable wallpaper blur**: soften the image behind Ghostty text from Off to 40 in Wallpapers. Drag the slider and release to apply; Reset blur restores the original. Text stays sharp, originals stay untouched, and saved looks, batch styling and undo remember the amount.
 - **Saved looks and favourites**: save a named combination of text colours, background, wallpaper and strength. Star favourites for the quick-access strip; update, rename or remove them in Saved looks.
 - **Undo and redo per terminal**: restore a previous complete look with `Ctrl+Z`, redo with `Ctrl+Shift+Z` or `Ctrl+Y`. A palette plus wallpaper change is one step. Hover previews and automatic rules do not add history.
 - **Batch styling**: Ctrl-click cards or use their `+` buttons to select several terminals. Select visible cards or the current workspace, then apply colours, moods, themes, saved looks or wallpapers together.
@@ -56,6 +59,7 @@ mood or theme to try it on the real window, click to keep it.
 
 - **Omarchy 4**, whose Quickshell-based shell runs the plugin.
 - **Aether 4 or newer** for moods. Omarchy installs Aether by default; if it's gone, `omarchy pkg add aether`.
+- **Python Pillow** for wallpaper blur: `omarchy pkg add python-pillow`. Rendered copies are cached privately in `~/.cache/ombre/wallpaper-blur` (or `$XDG_CACHE_HOME/ombre/wallpaper-blur`).
 - **Ghostty** for wallpapers: `omarchy install terminal ghostty`, then the one-time setup below.
 
 Tints and themes need nothing else. Ombre checks for Aether and Ghostty
@@ -261,3 +265,13 @@ omarchy plugin remove ekkostech.ombre
 ## License
 
 MIT
+
+### Wallpaper blur from the command line
+
+```sh
+ombre blur 16             # Blur the active terminal’s existing wallpaper
+ombre blur 0 --all        # Restore original images on all wallpaper terminals
+ombre wallpaper /absolute/path/image.png --blur 20
+```
+
+Blur ranges from 0 (Off) to 40. Existing wallpapers start with blur off.

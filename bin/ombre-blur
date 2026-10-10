@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Render a private cached wallpaper derivative. Original path arrives on stdin."""
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+
+
+def render(source, amount, cache=None):
+    amount = float(amount)
+    if not math.isfinite(amount) or amount < 0 or amount > 40:
+        raise ValueError("Blur must be between 0 and 40.")
+    amount = int(math.floor(amount + 0.5))
+    path = Path(source)
+    if not path.is_absolute() or any(c in source for c in ('\n', '\r', '"')):
+        raise ValueError("Invalid wallpaper path.")
+    if amount == 0:
+        return str(path)
+    from PIL import Image, ImageFilter, ImageOps
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("Wallpaper is not a regular file.")
+    cache = Path(cache or Path(os.environ.get("XDG_CACHE_HOME", str(Path.home()/".cache"))) / "ombre/wallpaper-blur")
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder = cache.lstat()
+    if not stat.S_ISDIR(folder.st_mode) or folder.st_uid != os.getuid():
+        raise ValueError("Blur cache must be a directory owned by you.")
+    cache.chmod(0o700)
+    identity = ["ombre-blur-v1", str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, amount]
+    key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+    target = cache / (key + ".png")
+    if target.exists() or target.is_symlink():
+        entry = target.lstat()
+        if not stat.S_ISREG(entry.st_mode) or entry.st_uid != os.getuid():
+            raise ValueError("Invalid blur cache entry.")
+        return str(target)
+    with Image.open(path) as original:
+        # A fixed reference width makes the control consistent across resolutions.
+        image = ImageOps.exif_transpose(original).convert("RGBA")
+        image.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
+        radius = amount * max(image.size) / 1920
+        image = image.filter(ImageFilter.GaussianBlur(radius=radius))
+        fd, temporary = tempfile.mkstemp(prefix=".render-", suffix=".png", dir=cache)
+        os.close(fd)
+        try:
+            image.save(temporary, format="PNG")
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+    return str(target)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--amount", required=True, type=float)
+    args = parser.parse_args()
+    try:
+        print(render(sys.stdin.read().rstrip("\n"), args.amount))
+    except ImportError:
+        print("Wallpaper blur requires python-pillow.", file=sys.stderr); return 1
+    except Exception as error:
+        print("Cannot blur wallpaper: " + str(error), file=sys.stderr); return 1
+    return 0
+
+if __name__ == "__main__": sys.exit(main())

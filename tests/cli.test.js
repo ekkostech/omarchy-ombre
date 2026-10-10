@@ -24,6 +24,8 @@ print(json.dumps({'saved':[{'name':'Deep Ocean','favorite':True}]}) if sys.argv[
   call=run(['look','Deep Ocean','--all']);assert.deepEqual(JSON.parse(call.args[4]),{value:'saved:Deep Ocean',target:'all'});
   call=run(['undo','--title','Claude API']);assert.deepEqual(JSON.parse(call.args[4]),{value:'undo',target:'title:Claude API'});
   call=run(['saved','rename','Deep Ocean','Night Study']);assert.equal(call.args[3],'renameSaved');assert.deepEqual(JSON.parse(call.args[4]),{from:'Deep Ocean',to:'Night Study'});
+  call=run(['blur','12','--all']);assert.deepEqual(JSON.parse(call.args[4]),{value:'blur:12',target:'all'});
+  call=run(['wallpaper','/tmp/a.png','--blur','16']);assert.equal(JSON.parse(call.args[4]).blur,16);
   assert.match(run(['--saved']).out,/★ Deep Ocean/);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

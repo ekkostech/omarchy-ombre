@@ -52,6 +52,14 @@ ShellRoot {
    var count=picker.histories[Workspace.key(a)].past.length
    picker.preview(0,Palette.tintLook("blue")); picker.endPreview()
    check(picker.histories[Workspace.key(a)].past.length===count,"hover polluted history")
+   picker.setBlur(16)
+   check(picker.terminals[0].wallpaper.blur===16,"blur missing")
+   picker.travelHistory(0,"undo")
+   check(picker.terminals[0].wallpaper.blur===0,"blur undo failed")
+   picker.travelHistory(0,"redo")
+   check(picker.terminals[0].wallpaper.blur===16,"blur redo failed")
+   picker.setStrength(0.15)
+   check(picker.terminals[0].wallpaper.blur===16,"strength reset blur")
    check(picker.saveNamedLook("Warm API"),"save failed")
    picker.favoriteNamedLook("Warm API")
    var saved=JSON.stringify({savedLooks:picker.savedLooks,welcomed:true})
@@ -59,7 +67,7 @@ ShellRoot {
    check(picker.savedLooks.length===1 && picker.favoriteLooks.length===1,"library reload lost favourite")
    picker.markedKeys=[Workspace.key(a),Workspace.key(b)]
    picker.applySavedTargets(picker.savedLooks[0])
-   check(picker.terminals[1].look.id==="fire" && picker.terminals[1].wallpaper===null,"mixed batch did not apply colours safely")
+   check(picker.terminals[1].look.id==="fire" && picker.terminals[1].wallpaper===null && picker.terminals[0].wallpaper.blur===16,"mixed batch did not apply colours safely")
    picker.setLayerColor("text","#ffeecc")
    check(Palette.lookForeground(picker.terminals[0].look)==="#ffeecc" && Palette.lookForeground(picker.terminals[1].look)==="#ffeecc","text batch failed")
    picker.searchText="web"
@@ -126,10 +134,10 @@ ShellRoot {
    assert.doesNotMatch(result.stdout+result.stderr,/Error:|TypeError:|ReferenceError:|Binding loop/);
    return result.stdout+result.stderr;
   }
-  run(`picker.terminals=[{pid:"123",pty:"pts/1",address:"a1",title:"demo",workspace:"1",look:Palette.tintLook("blue"),wallpaper:{path:"/demo/ocean.png",strength:0.15},wallpaperReady:true}];picker.current=0;picker.saveNamedLook("Ocean");picker.favoriteNamedLook("Ocean");picker.renameNamedLook("Ocean","Deep Ocean");`);
+  run(`picker.terminals=[{pid:"123",pty:"pts/1",address:"a1",title:"demo",workspace:"1",look:Palette.tintLook("blue"),wallpaper:{path:"/demo/ocean.png",strength:0.15,blur:22},wallpaperReady:true}];picker.current=0;picker.saveNamedLook("Ocean");picker.favoriteNamedLook("Ocean");picker.renameNamedLook("Ocean","Deep Ocean");`);
   const stored=JSON.parse(fs.readFileSync(config));
   assert.equal(stored.savedLooks[0].name,'Deep Ocean');assert.equal(stored.savedLooks[0].favorite,true);
-  assert.equal(stored.savedLooks[0].wallpaper.strength,0.15);
+  assert.equal(stored.savedLooks[0].wallpaper.strength,0.15);assert.equal(stored.savedLooks[0].wallpaper.blur,22);
   assert.equal(stored.pulse,false);assert.equal(stored.newTerminals.mode,'auto');assert.equal(stored.projects[0].path,'/Projects/demo');
   assert.equal(fs.statSync(config).mode & 0o777,0o600);
   assert.match(run(`if(picker.savedLooks.length!==1||picker.savedLooks[0].name!=="Deep Ocean"||!picker.savedLooks[0].favorite||picker.savedLooks[0].wallpaper.strength!==0.15)throw new Error("library reload failed");console.log("OMBRE_LIBRARY_RELOAD_PASS");Qt.quit();`),/OMBRE_LIBRARY_RELOAD_PASS/);

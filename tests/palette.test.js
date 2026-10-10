@@ -10,7 +10,7 @@ const src = fs.readFileSync(path.join(__dirname, "..", "Palette.js"), "utf8").re
 const P = {};
 vm.runInNewContext(src + "\n" + [
   "layerLook", "foregroundLook", "textLook", "backgroundLook", "lookForeground", "ghosttyColors", "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
-  "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper",
+  "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper", "normalizeBlur", "sameWallpaper",
   "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "themeGradient", "borderPair", "isImagePath", "themePalette", "parseToml"
 ].map((n) => `P.${n} = ${n};`).join("\n"), { P, JSON, Math });
 
@@ -221,4 +221,11 @@ test("explicit text color updates default foreground and ANSI normal/bright whit
       assert.equal(P.lookBackground(look, "#000000"), "#101830");
     }
   }
+});
+
+test("wallpaper blur defaults off, clamps safely and participates in equality",()=>{
+ assert.equal(P.normalizeWallpaper({path:"/a.png"}).blur,0);
+ assert.equal(P.normalizeBlur(99),40);assert.equal(P.normalizeBlur(-4),0);assert.equal(P.normalizeBlur("bad"),0);
+ assert.equal(P.sameWallpaper({path:"/a.png",strength:0.1},{path:"/a.png",strength:0.1,blur:0}),true);
+ assert.equal(P.sameWallpaper({path:"/a.png",strength:0.1,blur:10},{path:"/a.png",strength:0.1,blur:20}),false);
 });

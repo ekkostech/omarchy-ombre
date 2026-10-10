@@ -277,7 +277,7 @@ function ghosttyColors(look, themeBackground) {
 
 // ---- Wallpapers (Ghostty only) ----------------------------------------------
 
-// { path, strength }: an image file and how strongly it shows through the
+// { path, strength, blur }: an image file and how strongly it shows through the
 // background color (Ghostty's background-image-opacity). Ghostty shows images
 // far brighter than the number suggests: a light wallpaper at 0.4 drowns the
 // text. Hence a low scale with names instead of percentages.
@@ -294,16 +294,21 @@ function isImagePath(path) {
   return /^\//.test(p) && !/[\n"]/.test(p) && /\.(png|jpe?g)$/i.test(p);
 }
 
+function normalizeBlur(value) {
+  var n = Number(value);
+  return isFinite(n) ? Math.round(Math.max(0, Math.min(40, n))) : 0;
+}
+
 function normalizeWallpaper(w) {
   if (!w || typeof w !== "object" || !isImagePath(w.path)) return null;
   var strength = Number(w.strength);
   if (!isFinite(strength)) strength = DEFAULT_STRENGTH;
-  return { path: String(w.path), strength: Math.round(Math.max(0.01, Math.min(1, strength)) * 100) / 100 };
+  return { path: String(w.path), strength: Math.round(Math.max(0.01, Math.min(1, strength)) * 100) / 100, blur: normalizeBlur(w.blur) };
 }
 
 function sameWallpaper(a, b) {
   if (!a || !b) return !a && !b;
-  return a.path === b.path && a.strength === b.strength;
+  return a.path === b.path && a.strength === b.strength && normalizeBlur(a.blur) === normalizeBlur(b.blur);
 }
 
 // The escape sequence that makes a terminal wear a look. OSC 4/10/11/12 set the

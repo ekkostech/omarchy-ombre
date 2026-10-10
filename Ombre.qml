@@ -72,6 +72,9 @@ Item {
   property bool showHidden: false
   property bool reshadowAll: false
   property real strength: Palette.DEFAULT_STRENGTH
+  property int blur: 0
+  property string wallpaperMessage: ""
+  readonly property int currentBlur: root.selectedTerm && root.selectedTerm.wallpaper ? Palette.normalizeBlur(root.selectedTerm.wallpaper.blur) : root.blur
   property bool withWallpaper: true
   property bool welcomed: false
   property bool configLoaded: false
@@ -235,9 +238,10 @@ Item {
     try { req = JSON.parse(arg) } catch (e) { req = { value: String(arg || "").trim() } }
     if (!req || typeof req !== "object") return "error: bad request"
     var value = String(req.value || "")
+    if (req.blur !== undefined && (!isFinite(Number(req.blur)) || Number(req.blur) < 0 || Number(req.blur) > 40)) return "error: blur must be 0–40"
     if (!root.validSpec(value)) return "error: unknown look " + value
     root.requests = root.requests.concat([{ value: value, target: String(req.target || "focused"),
-                                            strength: Number(req.strength) || root.strength }])
+                                            strength: Number(req.strength) || root.strength, blur: req.blur === undefined ? root.blur : Palette.normalizeBlur(req.blur) }])
     root.scan()
     return "ok"
   }
@@ -402,6 +406,7 @@ Item {
       || v === "next" || v === "reset" || Palette.tintLook(v) !== null || /^text:#[0-9a-fA-F]{6}$/.test(v)
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
+      || (/^blur:[0-9]+$/.test(v) && Number(v.slice(5)) <= 40)
       || v === "pulse:now" || v === "pulse:stop"
       || v === "default:from" || v === "project:from"
       || v.indexOf("project:remove:/") === 0
@@ -460,6 +465,13 @@ Item {
         for (var si = 0; si < hits.length; si++) root.applySaved(root.indexOf(hits[si].pty), root.savedLooks[savedIndex], "all")
         continue
       }
+      if (req.value.indexOf("blur:") === 0) {
+        for (var bi = 0; bi < hits.length; bi++) {
+          var blurIndex = root.indexOf(hits[bi].pty), bw = root.terminals[blurIndex].wallpaper
+          if (bw) root.setWallpaper(blurIndex, {path: bw.path, strength: bw.strength, blur: Number(req.value.slice(5))})
+        }
+        continue
+      }
       if (req.value === "next") {
         for (var j = 0; j < hits.length; j++)
           root.commit(root.indexOf(hits[j].pty), Palette.tintLook(root.nextHue(hits[j].look)))
@@ -490,7 +502,7 @@ Item {
       }
       if (req.value.indexOf("wallpaper:") === 0) {
         var path = req.value.slice(10)
-        var wp = path === "none" ? null : { path: path, strength: req.strength }
+        var wp = path === "none" ? null : { path: path, strength: req.strength, blur: req.blur }
         for (var w = 0; w < hits.length; w++) {
           if (hits[w].wallpaperReady) root.setWallpaper(root.indexOf(hits[w].pty), wp)
           else console.warn("ombre: " + hits[w].title + " can't take a wallpaper")
@@ -922,7 +934,7 @@ Item {
     var term = root.terminals[index]
     var image = look ? (look.kind === "mood" ? look.source : look.image) : ""
     if (root.applyScope !== "text" && root.withWallpaper && term && term.wallpaperReady && Palette.isImagePath(image))
-      root.setWallpaper(index, { path: image, strength: root.strength })
+      root.setWallpaper(index, { path: image, strength: root.strength, blur: root.currentBlur })
     root.historyMuted = muted
     root.recordChange(index, before)
   }
@@ -932,7 +944,7 @@ Item {
   function sendWallpaper(term, wallpaper) {
     var w = Palette.normalizeWallpaper(wallpaper)
     root.send("ghostty " + term.pid + " " + (term.confDir || root.runtimeDir + "/ghostty/") + " "
-      + root.shadowVariant(term) + " " + Palette.ghosttyColors(term.look, root.themeBackground) + " " + (w ? w.strength + " " + w.path : "- -"))
+      + root.shadowVariant(term) + " " + Palette.ghosttyColors(term.look, root.themeBackground) + " " + (w ? w.strength + " " + w.blur + " " + w.path : "- 0 -"))
     // Re-send the look once the reload settles, in case it reset the colors.
     if (root.reshowPtys.indexOf(term.pty) < 0) root.reshowPtys = root.reshowPtys.concat([term.pty])
     reshowLater.restart()
@@ -1011,7 +1023,20 @@ Item {
     var targets = root.actionTargets.slice()
     for (var i = 0; i < targets.length; i++) {
       var term = root.terminals[targets[i]]
-      if (term.wallpaper) root.setWallpaper(targets[i], { path: term.wallpaper.path, strength: value })
+      if (term.wallpaper) root.setWallpaper(targets[i], { path: term.wallpaper.path, strength: value, blur: term.wallpaper.blur })
+    }
+  }
+
+  function setBlur(value) {
+    root.wallpaperMessage = ""
+    root.endPreview()
+    root.blur = Palette.normalizeBlur(value)
+    root.saveConfig()
+    var targets = root.actionTargets.slice()
+    for (var i = 0; i < targets.length; i++) {
+      var term = root.terminals[targets[i]]
+      if (term.wallpaper && term.wallpaperReady)
+        root.setWallpaper(targets[i], { path: term.wallpaper.path, strength: term.wallpaper.strength, blur: root.blur })
     }
   }
 
@@ -1059,7 +1084,7 @@ Item {
       if (r.error) return "error: " + r.error
       look = r.look
     }
-    var wp = Palette.isImagePath(req.wallpaper) ? { path: req.wallpaper, strength: Number(req.strength) || root.strength } : null
+    var wp = Palette.isImagePath(req.wallpaper) ? { path: req.wallpaper, strength: Number(req.strength) || root.strength, blur: req.blur === undefined ? root.blur : Palette.normalizeBlur(req.blur) } : null
     return root.setProject(req.path, look, wp)
   }
 
@@ -1195,7 +1220,7 @@ Item {
       var choices = root.wallpaperChoices
       var w = term.wallpaper ? choices.indexOf(term.wallpaper.path) : -1
       var wn = w < 0 ? (delta > 0 ? 0 : choices.length - 1) : (w + delta + choices.length) % choices.length
-      root.applyWallpaperTargets({ path: choices[wn], strength: root.strength })
+      root.applyWallpaperTargets({ path: choices[wn], strength: root.strength, blur: root.currentBlur })
       root.hoverText = Palette.basename(choices[wn])
       return
     }
@@ -1349,7 +1374,7 @@ Item {
     root.configDirty = false
     configWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$(dirname "$1")" && tmp=$(mktemp "$1.XXXXXX") && { printf "%s\\n" "$2" > "$tmp" && mv -f "$tmp" "$1"; }',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, strength: root.strength,
+        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, strength: root.strength, blur: root.blur,
         hiddenSources: root.hiddenSources,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
         projects: root.projects, savedLooks: root.savedLooks
@@ -1366,6 +1391,7 @@ Item {
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && Array.isArray(cfg.hiddenSources)) root.hiddenSources = cfg.hiddenSources.filter(Palette.isImagePath)
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
+      if (cfg && typeof cfg.blur === "number") root.blur = Palette.normalizeBlur(cfg.blur)
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
       if (cfg && cfg.welcomed === true) root.welcomed = true
       if (cfg && Array.isArray(cfg.savedLooks)) root.savedLooks = Workspace.library(cfg.savedLooks)
@@ -1467,8 +1493,8 @@ Item {
   //   write PTY SEQUENCE     escape sequence for the terminal (validated hex colors only)
   //   save PTY JSON          remember the look for the picker
   //   forget PTY
-  //   ghostty PID CONFDIR SHADOW COLORS STRENGTH PATH   per-window wallpaper and text shadow, then SIGUSR2
-  //     SHADOW is dark, light or -; STRENGTH PATH are "- -" for no wallpaper
+  //   ghostty PID CONFDIR SHADOW COLORS STRENGTH BLUR PATH   per-window wallpaper and text shadow, then SIGUSR2
+  //     SHADOW is dark, light or -; STRENGTH BLUR PATH are "- 0 -" for no wallpaper
   readonly property string writerScript:
     'umask 077; d=$1; plug=$2; mkdir -p "$d/ghostty" 2>/dev/null\n'
     + 'if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then echo "ombre: $d is not a private directory owned by you" >&2; exit 1; fi\n'
@@ -1487,9 +1513,12 @@ Item {
     + '    ghostty)\n'
     + '      case $key in ""|*[!0-9]*) continue ;; esac\n'
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
-    + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; path=${rest#* }\n'
+    + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; rest=${rest#* }; blur=${rest%% *}; path=${rest#* }\n'
     + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
     + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
+    + '      if [ "$strength" != "-" ] && [ "$blur" != "0" ]; then\n'
+    + '        if prepared=$(printf "%s\\n" "$path" | timeout 15 python3 -I "$plug/bin/ombre-blur" --amount "$blur"); then path=$prepared; else printf "wallpaper-error\\n"; continue; fi\n'
+    + '      fi\n'
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
     + '        if [ "$colors" != "-" ]; then printf "%s\\n" "$colors" | tr ";" "\\n"; fi\n'
@@ -1502,12 +1531,17 @@ Item {
     + '          echo "background-image-fit = cover"\n'
     + '          printf "background-image-opacity = %s\\n" "$strength"\n'
     + '        fi\n'
-    + '      } > "$cdir$key.conf" && kill -USR2 "$key" ;;\n'
+    + '      } > "$cdir$key.conf" && kill -USR2 "$key" && printf "wallpaper-ok\\n" ;;\n'
     + '  esac\n'
     + 'done 2>/dev/null\n'
 
   Process {
     id: writer
+    stdout: SplitParser {
+      onRead: function(data) {
+        if (data === "wallpaper-error") root.wallpaperMessage = "Could not render wallpaper blur. Check that the image is readable and python-pillow is installed."
+      }
+    }
     stdinEnabled: true
     running: true
     command: ["sh", "-c", root.writerScript, "sh", root.runtimeDir, root.pluginDir]
@@ -2574,7 +2608,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: root.libraryMessage || "Save the active terminal’s exact colours, wallpaper and strength. Click a saved look to apply it to the selected targets."
+              text: root.libraryMessage || "Save the active terminal’s exact colours, wallpaper, strength and blur. Click a saved look to apply it to the selected targets."
               color: root.muted
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -2877,6 +2911,49 @@ Item {
               }
             }
 
+            Row {
+              spacing: Style.space(10)
+              opacity: root.targetTakesWallpaper ? 1 : 0.4
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Blur"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+              PanelSlider {
+                id: blurSlider
+                width: Style.space(220)
+                minimum: 0
+                maximum: 40
+                step: 1
+                integer: true
+                enabled: root.targetTakesWallpaper
+                value: root.currentBlur
+                fillColor: root.accent
+                knobColor: root.accent
+                onReleased: function(value) { root.setBlur(value) }
+                Accessible.name: "Wallpaper blur"
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: Math.round(blurSlider.liveValue) === 0 ? "Off" : String(Math.round(blurSlider.liveValue))
+                color: root.text
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+              TextButton { label: "Reset blur"; enabled: root.targetTakesWallpaper; onActivated: root.setBlur(0) }
+            }
+            Text {
+              visible: root.wallpaperMessage !== ""
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: root.wallpaperMessage
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
             Flickable {
               width: parent.width
               height: Math.min(wallFlow.implicitHeight, Style.space(250))
@@ -2939,7 +3016,7 @@ Item {
                       onEntered: {
                         root.hoverText = wallTile.modelData ? Palette.basename(wallTile.modelData) : "No wallpaper"
                         if (root.selectedTakesWallpaper)
-                          root.previewWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                          root.previewWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength, blur: root.currentBlur } : null)
                       }
                       onExited: { root.hoverText = ""; previewEnd.restart() }
                       onClicked: function (mouse) {
@@ -2947,7 +3024,7 @@ Item {
                           if (root.hiddenSources.indexOf(wallTile.modelData) >= 0) root.unhideSource(wallTile.modelData)
                           else root.hideSource(wallTile.modelData)
                         } else if (root.targetTakesWallpaper)
-                          root.applyWallpaperTargets(wallTile.modelData ? { path: wallTile.modelData, strength: root.strength } : null)
+                          root.applyWallpaperTargets(wallTile.modelData ? { path: wallTile.modelData, strength: root.strength, blur: root.currentBlur } : null)
                       }
                     }
                   }
