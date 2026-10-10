@@ -20,6 +20,7 @@ Item {
   property var shell: null
   property var manifest: null
   readonly property string pluginId: (manifest && manifest.id) || "ekkostech.ombre"
+  readonly property string pluginVersion: (manifest && manifest.version) || ""
 
   property bool opened: false
   property var terminals: []
@@ -1744,19 +1745,31 @@ Item {
 
           Item {
             width: parent.width
-            height: Style.space(54)
+            height: Style.space(68)
 
             Row {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(12)
-              Image {
-                source: Qt.resolvedUrl("assets/promo/ombre-mark.svg")
-                width: Style.space(44)
-                height: width
-                sourceSize: Qt.size(width * 2, height * 2)
+              Column {
                 anchors.verticalCenter: parent.verticalCenter
-                Accessible.ignored: true
+                spacing: Style.space(3)
+                Image {
+                  source: Qt.resolvedUrl("assets/promo/ombre-mark.svg")
+                  width: Style.space(44)
+                  height: width
+                  sourceSize: Qt.size(width * 2, height * 2)
+                  Accessible.ignored: true
+                }
+                Text {
+                  objectName: "ombreVersionLabel"
+                  text: root.pluginVersion ? "v" + root.pluginVersion : "—"
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  Accessible.name: root.pluginVersion ? "Ombre version " + root.pluginVersion : "Ombre version unavailable"
+                }
               }
               Column {
                 anchors.verticalCenter: parent.verticalCenter

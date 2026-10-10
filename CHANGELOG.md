@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.3 — 2026-10-10
+- The picker always displays the installed plugin version beneath the Ombre logo. The label reads the manifest, so it follows future updates automatically.
+
 ## 1.4.2 — 2026-10-10
 - Borders come back. To put a window's border back to the theme, Ombre sent Hyprland `-1`, which Hyprland 0.56 treats as an empty colour: every terminal without a look lost its focus border and its fade. Ombre now reads the theme's border colours from Hyprland (again after each config reload) and sets those explicitly.
 
