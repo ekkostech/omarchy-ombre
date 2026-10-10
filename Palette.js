@@ -284,6 +284,15 @@ function borderCommand(prop, address, color, alpha) {
     + ", value = " + v + ", window = " + JSON.stringify("address:0x" + address) + " })";
 }
 
+// Both window opacities in one Hyprland call (Omarchy's rule dims every window a little;
+// 1 and 1 make it solid). Values are clamped to Hyprland's 0..1.
+function opacityPair(address, active, inactive) {
+  var w = JSON.stringify("address:0x" + address);
+  var v = function (x) { var n = Number(x); return isFinite(n) ? String(Math.min(1, Math.max(0, n))) : "1"; };
+  return "function() hl.dispatch(hl.dsp.window.set_prop({ prop = \"opacity\", value = " + v(active) + ", window = " + w + " }))"
+    + " hl.dispatch(hl.dsp.window.set_prop({ prop = \"opacity_inactive\", value = " + v(inactive) + ", window = " + w + " })) end";
+}
+
 // Both border colors in one Hyprland call, so they can't be applied out of
 // order with another update to the same window.
 function borderPair(address, active, activeAlpha, inactive, inactiveAlpha) {

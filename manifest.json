@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ekkostech.ombre",
   "name": "Ombre",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "author": "ekkostech",
   "license": "MIT",
   "description": "Shade each running terminal its own way: a tint, an Aether mood, an Omarchy theme or, in Ghostty, its own wallpaper and text shadow, with a border that pulses when its agent is done. Picked with live previews, without restarting what runs inside.",

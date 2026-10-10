@@ -11,7 +11,7 @@ const P = {};
 vm.runInNewContext(src + "\n" + [
   "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
   "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper",
-  "agentState", "pulseColor", "borderCommand", "isImagePath", "themePalette", "parseToml"
+  "agentState", "pulseColor", "borderCommand", "opacityPair", "isImagePath", "themePalette", "parseToml"
 ].map((n) => `P.${n} = ${n};`).join("\n"), { P, JSON, Math });
 
 test("tints mix into the theme background and stay dark on dark themes", () => {
@@ -87,4 +87,16 @@ test("Hyprland border commands quote the address and colour", () => {
   assert.equal(P.borderCommand("active_border_color", "ab12", "#3e63dd", "ff"),
     'hl.dsp.window.set_prop({ prop = "active_border_color", value = "rgba(3e63ddff)", window = "address:0xab12" })');
   assert.equal(P.borderCommand("active_border_color", "ab12", "", "ff").includes("value = -1"), true);
+});
+
+test("opacityPair sets both opacities in one call and clamps values", () => {
+  const solid = P.opacityPair("5a1b", 1, 1);
+  assert.match(solid, /^function\(\) hl\.dispatch\(/);
+  assert.match(solid, /prop = "opacity", value = 1, window = "address:0x5a1b"/);
+  assert.match(solid, /prop = "opacity_inactive", value = 1, window = "address:0x5a1b"/);
+  const back = P.opacityPair("5a1b", 0.985, 0.96);
+  assert.match(back, /prop = "opacity", value = 0\.985/);
+  assert.match(back, /prop = "opacity_inactive", value = 0\.96/);
+  assert.match(P.opacityPair("5a1b", 7, -2), /value = 1,.*value = 0,/);
+  assert.match(P.opacityPair("5a1b", "x", NaN), /value = 1,.*value = 1,/);
 });

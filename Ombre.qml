@@ -34,6 +34,11 @@ Item {
   // Settings kept in ~/.config/omarchy/ombre.json.
   property bool borders: true
   property bool pulse: true
+  // Ghostty windows fully opaque, so Omarchy's slight transparency doesn't let the desktop
+  // show through a terminal's wallpaper. solidOriginal keeps each window's own values.
+  property bool solid: true
+  property var solidOriginal: ({})
+  property bool solidLoaded: false
   property bool textShadow: false
   property var hiddenSources: []     // wallpaper paths hidden from the strips (files untouched)
   property bool showHidden: false
@@ -260,6 +265,64 @@ Item {
     return Palette.isLight(bg) ? "light" : "dark"
   }
 
+  // Omarchy dims every window a little (0.985 focused, 0.96 not), which lets the desktop
+  // show through a terminal's wallpaper. Solid makes Ghostty windows fully opaque; each
+  // window's own values are recorded first, so turning it off puts them back exactly.
+  function setSolid(enabled) {
+    root.solid = enabled === true || enabled === "true"
+    root.saveConfig()
+    if (root.solid) root.reapply()
+    else root.unsolidAll()
+    return "ok"
+  }
+
+  function applySolid(list) {
+    if (!root.solid || !root.solidLoaded || !root.configLoaded || solidReader.running) return
+    var fresh = []
+    for (var i = 0; i < list.length; i++)
+      if (list[i].ghostty && /^[0-9a-f]+$/.test(list[i].address || "") && !root.solidOriginal[list[i].address]) fresh.push(list[i].address)
+    if (fresh.length === 0) return
+    solidReader.command = ["sh", "-c", 'for a; do printf "%s %s %s\\n" "$a" "$(hyprctl getprop "address:0x$a" opacity 2>/dev/null | head -n1)" "$(hyprctl getprop "address:0x$a" opacity_inactive 2>/dev/null | head -n1)"; done', "sh"].concat(fresh)
+    solidReader.running = true
+  }
+
+  function onSolidRead(text) {
+    var originals = Object.assign({}, root.solidOriginal), lines = String(text).split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var p = lines[i].trim().split(/\s+/), active = parseFloat(p[1]), inactive = parseFloat(p[2])
+      if (p.length !== 3 || !(active > 0 && active <= 1 && inactive > 0 && inactive <= 1)) continue
+      originals[p[0]] = [active, inactive]
+      if (root.solid) Hyprland.dispatch(Palette.opacityPair(p[0], 1, 1))
+    }
+    root.solidOriginal = originals
+    root.saveSolid()
+  }
+
+  function unsolidAll() {
+    for (var addr in root.solidOriginal) {
+      var o = root.solidOriginal[addr]
+      Hyprland.dispatch(Palette.opacityPair(addr, o[0], o[1]))
+    }
+    root.solidOriginal = ({})
+    root.saveSolid()
+  }
+
+  function onSolidState(text) {
+    try {
+      var saved = JSON.parse(text), clean = {}
+      for (var addr in saved)
+        if (/^[0-9a-f]+$/.test(addr) && Array.isArray(saved[addr]) && saved[addr].length === 2) clean[addr] = saved[addr].map(Number)
+      root.solidOriginal = clean
+    } catch (e) { }
+    root.solidLoaded = true
+    if (root.configLoaded && root.solid) root.reapply()
+  }
+
+  function saveSolid() {
+    solidWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$1" 2>/dev/null; [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && printf "%s\\n" "$2" > "$1/solid.json"', "sh", root.runtimeDir, JSON.stringify(root.solidOriginal)]
+    solidWriter.running = true
+  }
+
   function setPulse(enabled) {
     root.pulse = enabled === true || enabled === "true"
     root.saveConfig()
@@ -396,6 +459,7 @@ Item {
     }
     root.applyProjects(list)
     root.applyDefaults(list)
+    root.applySolid(list)
     if (root.reshadowAll) {
       root.reshadowAll = false
       for (var r = 0; r < list.length; r++)
@@ -855,6 +919,7 @@ Item {
       else if (root.repaintAll) root.paintBorder(list[i], null)
     }
     root.repaintAll = false
+    root.applySolid(list)
     root.markSeen(list)
     if (root.opened) root.terminals = list
   }
@@ -943,7 +1008,7 @@ Item {
   function saveConfig() {
     configWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1"',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, textShadow: root.textShadow, strength: root.strength,
+        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, strength: root.strength,
         hiddenSources: root.hiddenSources,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
         projects: root.projects
@@ -956,6 +1021,7 @@ Item {
       var cfg = JSON.parse(text)
       if (cfg && typeof cfg.borders === "boolean") root.borders = cfg.borders
       if (cfg && typeof cfg.pulse === "boolean") root.pulse = cfg.pulse
+      if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && Array.isArray(cfg.hiddenSources)) root.hiddenSources = cfg.hiddenSources.filter(Palette.isImagePath)
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
@@ -1140,6 +1206,17 @@ Item {
   }
 
   Process { id: configWriter }
+  Process { id: solidWriter }
+  Process {
+    id: solidReader
+    stdout: StdioCollector { onStreamFinished: root.onSolidRead(text) }
+  }
+  Process {
+    id: solidState
+    running: true
+    command: ["sh", "-c", 'cat "$1/solid.json" 2>/dev/null; true', "sh", root.runtimeDir]
+    stdout: StdioCollector { onStreamFinished: root.onSolidState(text) }
+  }
 
   Process {
     id: configReader
@@ -1189,6 +1266,12 @@ Item {
       case "activewindowv2": root.activeAddress = data; root.stopPulse(data); break
       case "closewindow":
         root.dropPulse(data)
+        if (root.solidOriginal[data]) {
+          var kept = Object.assign({}, root.solidOriginal)
+          delete kept[data]
+          root.solidOriginal = kept
+          root.saveSolid()
+        }
         if (root.agentStates[data]) {
           var states = Object.assign({}, root.agentStates)
           delete states[data]
@@ -1199,7 +1282,7 @@ Item {
       case "openwindow":
         // A window can take seconds to start its shell; keep looking until it
         // shows up in a scan.
-        if (root.newDefault.mode !== "none" || root.textShadow || root.projects.length > 0) {
+        if (root.newDefault.mode !== "none" || root.textShadow || root.solid || root.projects.length > 0) {
           var aw = Object.assign({}, root.awaiting)
           aw[data.split(",")[0]] = true
           root.awaiting = aw
@@ -1481,6 +1564,7 @@ Item {
           else if (k === Qt.Key_H && (root.tab === "moods" || root.tab === "wallpapers")) root.showHidden = !root.showHidden
           else if (k === Qt.Key_B) root.setBorders(!root.borders)
           else if (k === Qt.Key_P) root.setPulse(!root.pulse)
+          else if (k === Qt.Key_O) root.setSolid(!root.solid)
           else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (k === Qt.Key_F && root.selectedTerm) root.saveProjectFrom(root.selectedTerm)
@@ -1538,6 +1622,23 @@ Item {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: root.setTextShadow(!root.textShadow)
+                }
+              }
+
+              Text {
+                visible: root.catalog.ghostty
+                text: root.solid ? "Solid Ghostty on" : "Solid Ghostty off"
+                color: solidHover.containsMouse ? root.text : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+
+                MouseArea {
+                  id: solidHover
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.setSolid(!root.solid)
                 }
               }
 

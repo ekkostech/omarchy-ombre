@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.0 — 2026-10-10
+- Solid Ghostty windows, on by default: Omarchy's window rule makes every window slightly transparent (0.985 focused, 0.96 not), which let the desktop wallpaper bleed through a terminal's own wallpaper. Ombre now sets Ghostty windows fully opaque, including new ones. `O` in the picker, the "Solid Ghostty" toggle or `ombre solid off` hands them back; each window returns to the exact opacity it had before.
+
 ## 1.3.2 — 2026-10-09
 - The pulse lets Hyprland tween the border colour on the GPU: two updates per cycle instead of sixteen when Hyprland's `border` animation is on, with the old stepping as a fallback.
 

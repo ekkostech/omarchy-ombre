@@ -33,6 +33,7 @@ mood or theme to try it on the real window, click to keep it.
 - **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength (Faint, Soft, Medium, Strong) keeps text readable on light and dark pictures.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
 - **Matching borders**: the Hyprland border takes the look's accent color, bright on the focused window and dark on the others so you can still see focus move (press `B` to turn it off).
+- **Solid Ghostty windows**: Omarchy makes every window slightly see-through (a little more when it isn't focused), which lets the desktop wallpaper show through a terminal's own wallpaper. Ombre makes Ghostty windows fully opaque, on by default. Press `O` or click "Solid Ghostty" to give Omarchy's transparency back; each window returns to exactly the opacity it had.
 - **Text shadow (Ghostty)**: a soft drop shadow under the text so it reads cleanly over any wallpaper. A tiny GPU shader that only runs when the terminal redraws. Press `T` to toggle.
 - **Project folders**: a terminal working inside a project's folder gets that project's look and wallpaper automatically, so Claude Code or Codex launched from `~/Projects/acme` comes up dressed for Acme. Style one terminal, press `F`, done. Your own wallpapers in `~/Wallpapers/Ombre/` show up in the Wallpapers tab.
 - **A default for new terminals**: new terminals can open with a saved look (and wallpaper), or each get a different tint automatically so new agents never look alike. Set it in the picker's New terminals tab.
@@ -93,6 +94,7 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 | `D` | Save the selected terminal's look as the default for new terminals |
 | `F` | Use the selected terminal's look for its project folder |
 | `T` | Text shadow on/off (Ghostty) |
+| `O` | Solid Ghostty windows on/off |
 | `B` | Borders on/off |
 | `P` | Pulse when an agent is done, on/off |
 | `Esc` / `Enter` | Close |
@@ -131,6 +133,7 @@ ombre --check              # what's installed and what's missing
 ombre borders off
 ombre pulse off            # or on; 'pulse now --title api' to try it
 ombre shadow on            # drop shadow under the text in Ghostty windows
+ombre solid off            # give Ghostty windows Omarchy's transparency back
 ombre default auto         # new terminals each get a different tint
 ombre default from         # new terminals copy the focused terminal's look
 ombre default none
@@ -173,6 +176,11 @@ reload it. The plugin only signals processes it has confirmed are Ghostty
 windows started by the launcher. Omarchy's theme switch reloads Ghostty the same
 way, so wallpapers survive it. `ombre setup-ghostty --undo` reverts the
 setup.
+
+Solid windows use Hyprland's per-window `opacity` and `opacity_inactive` properties, set
+to 1 on Ghostty windows only. Hyprland can't unset those properties, so before changing a
+window Ombre records its current values (in `$XDG_RUNTIME_DIR/ombre/solid.json`) and puts
+exactly those back when the setting is turned off.
 
 The pulse watches Hyprland's window events. A title that switches from a
 spinner (`◐ ◓ ◑ ◒`) to `✳` means an agent finished, and an `urgent` event means
