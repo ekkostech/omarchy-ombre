@@ -272,7 +272,7 @@ Item {
       root.agentThemeStatus = status
       root.agentThemeMessage = status.errors && status.errors.length ? status.errors.join(" · ")
         : root.agentThemeAction === "unlink" ? "Previous app themes restored. Open /theme in running sessions to select them."
-        : status.linked ? "Linked. In running Claude and Codex sessions, select Ombre in /theme once. Then moods follow live."
+        : status.linked ? "Each terminal follows its own palette. In existing app sessions, select Ombre in /theme once."
         : "Link once to make Claude’s interface and Codex’s code colors follow each terminal."
     } catch (e) { root.agentThemeMessage = "Could not read app theme settings." }
   }
@@ -1540,8 +1540,11 @@ Item {
     property string label: ""
     property bool chosen: false
     signal activated()
+    Accessible.role: Accessible.Button
+    Accessible.name: label
+    Accessible.onPressAction: activated()
     width: buttonText.implicitWidth + Style.space(16)
-    height: buttonText.implicitHeight + Style.space(8)
+    height: buttonText.implicitHeight + Style.space(12)
     radius: Style.cornerRadius
     color: chosen ? Color.menu.selectedBackground : "transparent"
     border.width: Math.max(1, Style.space(1))
@@ -1741,87 +1744,65 @@ Item {
 
           Item {
             width: parent.width
-            height: titleText.implicitHeight
+            height: Style.space(54)
 
-            Text {
-              id: titleText
+            Row {
               anchors.left: parent.left
-              text: "Ombre"
-              color: root.text
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.heading
-              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(12)
+              Image {
+                source: Qt.resolvedUrl("assets/promo/ombre-mark.svg")
+                width: Style.space(44)
+                height: width
+                sourceSize: Qt.size(width * 2, height * 2)
+                anchors.verticalCenter: parent.verticalCenter
+                Accessible.ignored: true
+              }
+              Column {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(3)
+                Text {
+                  text: "OMBRE"
+                  color: root.text
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.heading
+                  font.letterSpacing: Style.space(2)
+                  font.bold: true
+                }
+                Text {
+                  text: "Terminal colors & backgrounds"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
             }
 
             Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(16)
-
-              Text {
+              spacing: Style.space(6)
+              TextButton {
                 visible: root.catalog.launcher
-                text: root.textShadow ? "Text shadow on" : "Text shadow off"
-                color: shadowHover.containsMouse ? root.text : root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-
-                MouseArea {
-                  id: shadowHover
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.setTextShadow(!root.textShadow)
-                }
+                label: "Text shadow"
+                chosen: root.textShadow
+                onActivated: root.setTextShadow(!root.textShadow)
               }
-
-              Text {
+              TextButton {
                 visible: root.catalog.ghostty
-                text: root.solid ? "Solid Ghostty on" : "Solid Ghostty off"
-                color: solidHover.containsMouse ? root.text : root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-
-                MouseArea {
-                  id: solidHover
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.setSolid(!root.solid)
-                }
+                label: "Solid windows"
+                chosen: root.solid
+                onActivated: root.setSolid(!root.solid)
               }
-
-              Text {
-                text: root.pulse ? "Pulse when done on" : "Pulse when done off"
-                color: pulseHover.containsMouse ? root.text : root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-
-                MouseArea {
-                  id: pulseHover
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.setPulse(!root.pulse)
-                }
+              TextButton {
+                label: "Pulse"
+                chosen: root.pulse
+                onActivated: root.setPulse(!root.pulse)
               }
-
-              Text {
-                text: root.borders ? "Borders on" : "Borders off"
-                color: bordersHover.containsMouse ? root.text : root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-
-                MouseArea {
-                  id: bordersHover
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.setBorders(!root.borders)
-                }
+              TextButton {
+                label: "Borders"
+                chosen: root.borders
+                onActivated: root.setBorders(!root.borders)
               }
             }
           }
@@ -2677,7 +2658,7 @@ Item {
             width: parent.width
             elide: Text.ElideRight
             text: root.hoverText
-              || "Click a card to select · hover to preview · click to keep · 1–8 tint · 0 clear · Space next · Tab switch tabs · W mood wallpaper · X hide it · H show hidden · D default · F folder · B borders · P pulse · T text shadow · Esc"
+              || "Select a terminal · Hover to preview · Click to apply     /     1–8 tint · Space next preset · Tab switch · Esc close"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
