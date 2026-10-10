@@ -294,18 +294,15 @@ function borderCommand(prop, address, color, alpha, fallback) {
     + ", value = " + v + ", window = " + JSON.stringify("address:0x" + address) + " })";
 }
 
-// A gradient as `hyprctl -j getoption general:col.active_border` reports it
-// ("ff788fff 0deg", colors as aarrggbb) in the form set_prop accepts ("rgba(788fffff) 0deg").
+// The theme's border color as `hyprctl -j getoption general:col.active_border` reports
+// it ("ff788fff 0deg", colors as aarrggbb), in the form set_prop accepts: "rgba(788fffff)".
+// Only the first color: a per-window value with an angle, or with several colors, is
+// rejected by Hyprland 0.56 and leaves the border empty.
 function themeGradient(text) {
   var g = "";
   try { g = String(JSON.parse(String(text || "").trim()).gradient || ""); } catch (e) { var m = String(text || "").match(/gradient data:\s*([^\n]+)/); g = m ? m[1] : ""; }
-  var parts = g.trim().split(/\s+/), out = [];
-  for (var i = 0; i < parts.length; i++) {
-    if (/^[0-9a-f]{8}$/i.test(parts[i])) out.push("rgba(" + parts[i].slice(2) + parts[i].slice(0, 2) + ")");
-    else if (/^-?\d+deg$/.test(parts[i])) out.push(parts[i]);
-    else return "";
-  }
-  return out.length && /^rgba/.test(out[0]) ? out.join(" ") : "";
+  var first = g.trim().split(/\s+/)[0] || "";
+  return /^[0-9a-f]{8}$/i.test(first) ? "rgba(" + first.slice(2) + first.slice(0, 2) + ")" : "";
 }
 
 // Both window opacities in one Hyprland call (Omarchy's rule dims every window a little;

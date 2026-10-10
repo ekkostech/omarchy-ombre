@@ -116,13 +116,13 @@ test("a mood's background and text carry its accent so moods differ on black the
 });
 
 test("no look puts the theme's border back instead of emptying it", () => {
-  assert.equal(P.themeGradient('{"option": "general:col.active_border", "gradient": "ff788fff 0deg", "set": true }'), "rgba(788fffff) 0deg");
-  assert.equal(P.themeGradient("gradient data: ee33ccff ee00ff99 45deg\nset: true"), "rgba(33ccffee) rgba(00ff99ee) 45deg");
+  assert.equal(P.themeGradient('{"option": "general:col.active_border", "gradient": "ff788fff 0deg", "set": true }'), "rgba(788fffff)");
+  assert.equal(P.themeGradient("gradient data: ee33ccff ee00ff99 45deg\nset: true"), "rgba(33ccffee)");
   assert.equal(P.themeGradient("nonsense"), "");
-  const theme = { active: "rgba(788fffff) 0deg", inactive: "rgba(595959aa) 0deg" };
+  const theme = { active: "rgba(788fffff)", inactive: "rgba(595959aa)" };
   const back = P.borderPair("ab12", "", "ff", "", "ff", theme);
-  assert.ok(back.includes('prop = "active_border_color", value = "rgba(788fffff) 0deg"'));
-  assert.ok(back.includes('prop = "inactive_border_color", value = "rgba(595959aa) 0deg"'));
+  assert.ok(back.includes('prop = "active_border_color", value = "rgba(788fffff)"'));
+  assert.ok(back.includes('prop = "inactive_border_color", value = "rgba(595959aa)"'));
   assert.ok(!back.includes("-1"));
   assert.ok(P.borderPair("ab12", "#3e63dd", "ff", "#1a2a5a", "ff", theme).includes('value = "rgba(3e63ddff)"'));
 });
