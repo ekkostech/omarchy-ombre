@@ -16,6 +16,9 @@
 #   ombre blur 12             blur the current wallpaper (0–40; 0 is off)
 #   ombre setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
 #   ombre hide /path/to/wallpaper.jpg   hide a wallpaper from the picker's strips (file untouched); 'unhide' or 'unhide all'
+#   ombre images add PATH...   add wallpapers from anywhere: PNG/JPEG files or whole folders (only read, never changed)
+#   ombre images remove PATH   take an added file or folder back out of the picker (files untouched)
+#   ombre images list          show the added files and folders and how many images each holds
 #   ombre borders on|off       follow the look with the window border
 #   ombre pulse on|off         pulse a terminal's border when its agent finishes
 #   ombre shadow on|off        drop shadow under the text (Ghostty windows)
@@ -111,6 +114,26 @@ case ${1:-} in
     [[ -n ${2:-} ]] || usage 1
     if [[ $2 == none ]]; then set -- "wallpaper:none" "${@:3}"
     else set -- "wallpaper:$(readlink -f "$2")" "${@:3}"; fi ;;
+  images)
+    case ${2:-} in
+      add)
+        (($# >= 3)) || usage 1
+        for p in "${@:3}"; do
+          p=$(realpath -s -m -- "$p")
+          info=$(python3 -I "$(dirname "$(readlink -f "$0")")/ombre-images" "$p" | jq -r '.sources[0] | "\(.kind) \(.images | length)"')
+          case ${info%% *} in
+            missing) echo "ombre: $p was not found" >&2; exit 1 ;;
+            unsupported) echo "ombre: $p is not a PNG or JPEG image (the formats Ghostty can show)" >&2; exit 1 ;;
+          esac
+          call addImageSource "$p"
+          n=${info#* }
+          echo "added $p ($n image$([[ $n == 1 ]] || echo s))"
+        done ;;
+      remove) [[ -n ${3:-} ]] || usage 1; call removeImageSource "$(realpath -s -m -- "$3")" ;;
+      list) omarchy-shell shell call "$id" looks "" | jq -r '.imageSources[]? | "\(.path)\t\(.kind)\t\(.count)"' ;;
+      *) usage 1 ;;
+    esac
+    exit ;;
   hide) [[ -n ${2:-} ]] || usage 1; call hideSource "$(readlink -f "$2")"; exit ;;
   unhide) [[ -n ${2:-} ]] || usage 1; [[ $2 == all ]] && call unhideSource "*" || call unhideSource "$(readlink -f "$2")"; exit ;;
   borders)

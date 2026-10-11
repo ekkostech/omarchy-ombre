@@ -614,7 +614,7 @@ function match(list, target) {
 //   @@THEME <name>\t<background image>   then that theme's colors.toml
 function parseCatalog(text) {
   var out = { wallpaper: "", aether: false, aetherInstalled: false, aetherVersion: "",
-              ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [], own: [] };
+              ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [], own: [], places: [] };
   var section = "", buf = [], theme = null, byName = {};
 
   function flush() {
@@ -647,6 +647,11 @@ function parseCatalog(text) {
     else if (line === "@@MODES") section = "modes";
     else if (line === "@@GHOSTTY") { out.ghostty = true; section = ""; }
     else if (line.indexOf("@@OMBRE ") === 0) { out.own.push(line.slice(8).trim()); section = ""; }
+    else if (line.indexOf("@@PLACE ") === 0) {
+      var place = cleanSourcePath(line.slice(8));
+      if (place && out.places.indexOf(place) < 0) out.places.push(place);
+      section = "";
+    }
     else if (line === "@@LAUNCHER") { out.launcher = true; section = ""; }
     else if (line === "@@WALLPAPERS") section = "wallpapers";
     else if (line.indexOf("@@THEME ") === 0) {
@@ -711,4 +716,140 @@ function parseMoods(text, modes, source) {
 
 function fileUrl(path) {
   return "file://" + String(path || "").split("/").map(encodeURIComponent).join("/");
+}
+
+// ---- Images added from anywhere ---------------------------------------------
+// Users add PNG/JPEG files or whole folders; bin/ombre-images reads them and
+// reports {sources: [{path, kind, images, groups: [{dir, depth, images, total}],
+// truncated}]}. kind is file, folder, missing or unsupported.
+var MAX_IMAGE_SOURCES = 64;
+var IMAGE_SOURCE_KINDS = ["file", "folder", "missing", "unsupported"];
+
+function cleanSourcePath(path) {
+  var p = String(path || "").trim();
+  if (p.length > 1) p = p.replace(/\/+$/, "");
+  return /^\//.test(p) && !/[\n\r"]/.test(p) ? p : "";
+}
+
+function normalizeImageSources(list) {
+  var out = [];
+  (Array.isArray(list) ? list : []).forEach(function (p) {
+    var c = cleanSourcePath(p);
+    if (c && out.indexOf(c) < 0 && out.length < MAX_IMAGE_SOURCES) out.push(c);
+  });
+  return out;
+}
+
+function folderName(path) {
+  var s = String(path || "");
+  return s === "/" ? "/" : s.slice(s.lastIndexOf("/") + 1);
+}
+
+function tildePath(path, home) {
+  var s = String(path || "");
+  return home && (s === home || s.indexOf(home + "/") === 0) ? "~" + s.slice(home.length) : s;
+}
+
+function parseImageScan(text) {
+  var byPath = {};
+  try {
+    var j = JSON.parse(String(text || ""));
+    (j.sources || []).forEach(function (s) {
+      if (!s || typeof s.path !== "string") return;
+      var groups = (Array.isArray(s.groups) ? s.groups : []).filter(function (g) {
+        return g && typeof g.dir === "string" && g.dir.charAt(0) === "/";
+      }).map(function (g) {
+        var images = (Array.isArray(g.images) ? g.images : []).filter(isImagePath);
+        var total = Number(g.total);
+        return { dir: g.dir, depth: Math.max(0, Math.min(8, Math.floor(Number(g.depth) || 0))), images: images,
+                 total: isFinite(total) && total >= images.length ? Math.floor(total) : images.length };
+      });
+      byPath[s.path] = {
+        path: s.path,
+        kind: IMAGE_SOURCE_KINDS.indexOf(s.kind) >= 0 ? s.kind : "missing",
+        images: (Array.isArray(s.images) ? s.images : []).filter(isImagePath),
+        groups: groups,
+        truncated: s.truncated === true
+      };
+    });
+  } catch (e) { }
+  return byPath;
+}
+
+// Every image the added sources hold, in the order they were added.
+function addedImages(sources, scan) {
+  var out = [], seen = {};
+  (sources || []).forEach(function (src) {
+    var s = scan && scan[src];
+    if (!s) return;
+    s.images.forEach(function (p) { if (!seen[p]) { seen[p] = true; out.push(p); } });
+  });
+  return out;
+}
+
+// The wallpaper grid, top to bottom: single added images, each added folder
+// and the folders inside it, then the built-in wallpapers. A folded section
+// keeps its header and drops its images; folding a folder also drops every
+// folder inside it. Each section:
+//   { key, title, detail, note, depth, count, images, collapsed, source, removableImages, empty }
+// source is set on a removable header (an added file or folder).
+function imageSections(builtin, sources, scan, collapsed, hidden, showHidden, home) {
+  collapsed = collapsed || [];
+  var hide = function (list) {
+    return showHidden ? list : list.filter(function (p) { return (hidden || []).indexOf(p) < 0; });
+  };
+  var folded = function (key) { return collapsed.indexOf(key) >= 0; };
+  var section = function (key, title, images, extra) {
+    var s = { key: key, title: title, detail: "", note: "", depth: 0, count: images.length, images: images,
+              collapsed: folded(key), source: "", removableImages: false, empty: false };
+    for (var k in extra) s[k] = extra[k];
+    if (s.collapsed) s.images = [];
+    return s;
+  };
+  var out = [];
+  var files = [];
+  (sources || []).forEach(function (src) {
+    var s = scan && scan[src];
+    if (s && s.kind === "file") files = files.concat(s.images);
+  });
+  files = hide(files);
+  if (files.length) out.push(section("@files", "Added images", files, { removableImages: true }));
+
+  (sources || []).forEach(function (src) {
+    var s = scan && scan[src];
+    if (s && s.kind === "file") return;
+    if (!s || s.kind !== "folder") {
+      out.push(section(src, folderName(src), [], {
+        detail: tildePath(src, home), source: src, empty: true, collapsed: false,
+        note: !s ? "Reading…" : s.kind === "missing" ? "Not found. Is the drive connected?" : "Not a PNG or JPEG image, which is all Ghostty can show."
+      }));
+      return;
+    }
+    var below = -1;   // depth of a folded folder whose insides are skipped
+    s.groups.forEach(function (g, i) {
+      if (below >= 0 && g.depth > below) return;
+      below = -1;
+      var top = i === 0;
+      var images = hide(g.images);
+      var item = section(g.dir, top ? folderName(src) : folderName(g.dir), images, {
+        depth: g.depth, count: g.total, source: top ? src : "", detail: top ? tildePath(src, home) : "",
+        empty: g.total === 0,
+        note: top && g.total === 0 ? "No PNG or JPEG images in this folder."
+          : top && s.truncated ? "Showing the first " + g.total + " images." : ""
+      });
+      out.push(item);
+      if (item.collapsed) below = g.depth;
+    });
+  });
+  out.push(section("@builtin", "Built-in", hide(builtin || [])));
+  return out;
+}
+
+// What Space steps through on the wallpapers tab: the images on show.
+function visibleImages(sections) {
+  var out = [], seen = {};
+  (sections || []).forEach(function (s) {
+    s.images.forEach(function (p) { if (p && !seen[p]) { seen[p] = true; out.push(p); } });
+  });
+  return out;
 }

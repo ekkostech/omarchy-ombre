@@ -1,4 +1,5 @@
 import QtQuick
+import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Io
 import Quickshell.Hyprland
@@ -74,13 +75,23 @@ Item {
   property real strength: Palette.DEFAULT_STRENGTH
   property int blur: 0
   property string wallpaperMessage: ""
+  // Images added from anywhere (PNG/JPEG files or whole folders), read by bin/ombre-images.
+  property var imageSources: []        // absolute paths, in the order added
+  property var collapsedFolders: []    // folded wallpaper sections: folder paths, "@builtin", "@files"
+  property var imageScan: ({})         // source path -> what the scan found there
+  property bool imageScanAgain: false
+  property var imagesAdding: []        // sources just added, each reported on once it has been read
+  property string imageApplyPath: ""   // a browsed image to put on the selected terminals once it proves real
+  property bool browsing: false        // the folder browser stands in for the wallpaper grid
+  property string browseFolder: ""
+  onBrowseFolderChanged: browsePath.text = Palette.tildePath(browseFolder, home)
   readonly property int currentBlur: root.selectedTerm && root.selectedTerm.wallpaper ? Palette.normalizeBlur(root.selectedTerm.wallpaper.blur) : root.blur
   property bool withWallpaper: true
   property bool welcomed: false
   property bool configLoaded: false
 
   // Catalog of moods, themes and wallpapers, refreshed whenever the picker opens.
-  property var catalog: ({ wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [], own: [] })
+  property var catalog: ({ wallpaper: "", aether: false, ghostty: false, launcher: false, modes: [], wallpapers: [], themes: [], own: [], places: [] })
   property bool catalogLoaded: false
   property real catalogAt: 0
   property string tab: "moods"
@@ -163,15 +174,37 @@ Item {
   readonly property var moodSources: showHidden ? allMoodSources
     : allMoodSources.filter(function (p) { return hiddenSources.indexOf(p) < 0 })
   readonly property int hiddenCount: hiddenSources.length
-  // Wallpapers to pick from: the current one, Aether's library, then each theme's.
-  readonly property var wallpaperChoices: {
+  // Built-in wallpapers: Ombre's folder, the current one, Aether's library, then each theme's.
+  readonly property var builtinWallpapers: {
     var out = catalog.own.filter(Palette.isImagePath)
     root.allMoodSources.forEach(function (w) { if (Palette.isImagePath(w) && out.indexOf(w) < 0) out.push(w) })
     for (var i = 0; i < catalog.themes.length; i++) {
       var img = catalog.themes[i].image
       if (Palette.isImagePath(img) && out.indexOf(img) < 0) out.push(img)
     }
+    return out
+  }
+  readonly property var addedImages: Palette.addedImages(imageSources, imageScan)
+  // Wallpapers to pick from: the built-in ones, then the images added from anywhere.
+  readonly property var wallpaperChoices: {
+    var out = builtinWallpapers.slice(), seen = {}
+    out.forEach(function (p) { seen[p] = true })
+    addedImages.forEach(function (p) { if (!seen[p]) { seen[p] = true; out.push(p) } })
     if (!showHidden) out = out.filter(function (p) { return hiddenSources.indexOf(p) < 0 })
+    return out
+  }
+  // The wallpaper grid in foldable sections, and the images it shows right now.
+  readonly property var wallpaperSections: Palette.imageSections(builtinWallpapers, imageSources, imageScan,
+    collapsedFolders, hiddenSources, showHidden, home)
+  readonly property var shownWallpapers: Palette.visibleImages(wallpaperSections)
+  // Quick jumps for the folder browser.
+  readonly property var browsePlaces: {
+    var named = { "/mnt": "Drives", "/media": "Media" }
+    named[home + "/.config/omarchy/backgrounds"] = "Omarchy backgrounds"
+    named["/run/media/" + Palette.folderName(home)] = "Removable drives"
+    var out = [{ name: "Home", path: home }]
+    catalog.places.forEach(function (p) { out.push({ name: named[p] || Palette.tildePath(p, home).replace(/^~\//, ""), path: p }) })
+    out.push({ name: "Computer", path: "/" })
     return out
   }
   readonly property string activeMoodSource: moodSource || catalog.wallpaper
@@ -204,8 +237,10 @@ Item {
     root.focusOnScan = true
     root.hoverText = ""
     root.setupMessage = ""
+    root.wallpaperMessage = ""
     root.checkAgentThemes("status")
     root.scan()
+    root.scanImages()
     // The catalog is cheap but forks a process per theme, so refresh it at most
     // once a minute; a theme change refreshes it right away.
     if (!root.catalogLoaded || Date.now() - root.catalogAt > 60000) root.loadCatalog()
@@ -215,6 +250,7 @@ Item {
 
   function close() {
     root.endPreview()
+    root.browsing = false
     root.opened = false
   }
 
@@ -273,6 +309,10 @@ Item {
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
       wallpapers: root.wallpaperChoices,
+      imageSources: root.imageSources.map(function (p) {
+        var s = root.imageScan[p]
+        return { path: p, kind: s ? s.kind : "reading", count: s ? s.images.length : 0 }
+      }),
       projects: root.projects.map(function (r) { return { path: r.path, look: root.ruleLabel(r) } }),
       wallpaper: root.catalog.wallpaper,
       aether: root.catalog.aether,
@@ -837,6 +877,159 @@ Item {
     return "ok"
   }
 
+  // ---- Images from anywhere --------------------------------------------
+  // Add a PNG/JPEG file, or a folder of them, from anywhere. Files are only
+  // read: nothing is copied, moved or changed. Callable from the shell too.
+  function addImageSource(path) {
+    var p = Palette.cleanSourcePath(String(path || "").trim().replace(/^~(?=\/|$)/, root.home))
+    if (!p) { root.wallpaperMessage = "Give a full path to an image or a folder, such as ~/Pictures."; return "error: needs a full path" }
+    if (root.imageSources.indexOf(p) >= 0) { root.wallpaperMessage = Palette.folderName(p) + " is already added."; return "ok" }
+    if (root.imageSources.length >= Palette.MAX_IMAGE_SOURCES) {
+      root.wallpaperMessage = "Ombre holds up to " + Palette.MAX_IMAGE_SOURCES + " added files and folders. Remove one first."
+      return "error: too many added files and folders"
+    }
+    root.imageSources = root.imageSources.concat([p])
+    root.imagesAdding = root.imagesAdding.concat([p])
+    root.wallpaperMessage = "Reading " + Palette.folderName(p) + "…"
+    root.saveConfig()
+    root.scanImages()
+    return "ok"
+  }
+
+  // Take an added file or folder back out. The files stay where they are.
+  function removeImageSource(path) {
+    var p = Palette.cleanSourcePath(path)
+    if (root.imageSources.indexOf(p) < 0) return "error: not added: " + path
+    var keep = root.imageSources.filter(function (s) { return s !== p })
+    root.imageSources = keep
+    root.collapsedFolders = root.collapsedFolders.filter(function (k) {
+      if (k !== p && k.indexOf(p + "/") !== 0) return true
+      return keep.some(function (s) { return k === s || k.indexOf(s + "/") === 0 })
+    })
+    var scan = Object.assign({}, root.imageScan)
+    delete scan[p]
+    root.imageScan = scan
+    root.saveConfig()
+    root.wallpaperMessage = "Removed " + Palette.folderName(p) + " from Ombre. The files are untouched."
+    return "ok"
+  }
+
+  function toggleSection(key) {
+    root.collapsedFolders = root.collapsedFolders.indexOf(key) >= 0
+      ? root.collapsedFolders.filter(function (k) { return k !== key })
+      : root.collapsedFolders.concat([key])
+    root.saveConfig()
+  }
+
+  function scanImages() {
+    if (imagesProc.running) { root.imageScanAgain = true; return }
+    if (root.imageSources.length === 0) { root.imageScan = ({}); return }
+    imagesProc.command = ["python3", "-I", root.pluginDir + "/bin/ombre-images"].concat(root.imageSources)
+    imagesProc.running = true
+  }
+
+  function onImageScan(text) {
+    if (String(text || "").trim() === "") return
+    root.imageScan = Palette.parseImageScan(text)
+    var read = root.imagesAdding.filter(function (p) { return root.imageScan[p] })
+    root.imagesAdding = root.imagesAdding.filter(function (p) { return !root.imageScan[p] })
+    read.forEach(root.reportAdded)
+  }
+
+  // Say what an addition held. Anything that isn't a real PNG/JPEG comes back out.
+  function reportAdded(p) {
+    var s = root.imageScan[p], name = Palette.folderName(p)
+    var apply = root.imageApplyPath === p
+    if (apply) root.imageApplyPath = ""
+    if (s.kind === "missing" || s.kind === "unsupported") {
+      root.imageSources = root.imageSources.filter(function (x) { return x !== p })
+      root.saveConfig()
+      root.wallpaperMessage = s.kind === "missing" ? name + " was not found."
+        : name + " is not a PNG or JPEG image, so it was not added. Ghostty can only show those two formats."
+      return
+    }
+    if (s.kind === "file") {
+      root.wallpaperMessage = "Added " + name + "."
+      if (apply && root.targetTakesWallpaper) root.applyWallpaperTargets({ path: p, strength: root.strength, blur: root.currentBlur })
+      return
+    }
+    // A folder of folders opens tidy: its own images show, the folders inside start folded.
+    var inner = s.groups.filter(function (g) { return g.depth === 1 && root.collapsedFolders.indexOf(g.dir) < 0 })
+      .map(function (g) { return g.dir })
+    if (inner.length) root.collapsedFolders = root.collapsedFolders.concat(inner)
+    root.saveConfig()
+    var total = s.groups.length ? s.groups[0].total : 0
+    root.wallpaperMessage = total === 0 ? "Added " + name + ", but it has no PNG or JPEG images."
+      : "Added " + name + ": " + (s.truncated ? "the first " : "") + total + (total === 1 ? " image" : " images")
+        + (inner.length ? ". Click a folder to open it." : ".")
+  }
+
+  function openBrowser() {
+    if (!root.browseFolder) {
+      var pictures = root.home + "/Pictures"
+      root.browseFolder = root.catalog.places.indexOf(pictures) >= 0 ? pictures : (root.home || "/")
+    }
+    root.wallpaperMessage = ""
+    root.tab = "wallpapers"
+    root.tabChosen = true
+    root.browsing = true
+  }
+
+  function closeBrowser() {
+    root.browsing = false
+    previewEnd.restart()
+    keyCatcher.forceActiveFocus()
+  }
+
+  // Go to a folder, or take an image, typed or pasted as a path (~ works).
+  function browseTo(path) {
+    var p = Palette.cleanSourcePath(String(path || "").trim().replace(/^~(?=\/|$)/, root.home))
+    if (!p) { root.wallpaperMessage = "Type a full path, such as ~/Pictures or /mnt/photos."; return }
+    if (Palette.isImagePath(p)) { root.useBrowsedImage(p); return }
+    root.wallpaperMessage = ""
+    root.browseFolder = p
+    root.saveConfig()
+  }
+
+  function browseUp() {
+    var f = root.browseFolder
+    if (!f || f === "/") return
+    root.browseFolder = f.slice(0, f.lastIndexOf("/")) || "/"
+    root.saveConfig()
+  }
+
+  function openBrowsed(index) {
+    if (index < 0 || index >= folderModel.count) return
+    var path = String(folderModel.get(index, "filePath") || "")
+    if (folderModel.get(index, "fileIsDir")) root.browseTo(path)
+    else if (path) root.useBrowsedImage(path)
+  }
+
+  // One image from the browser: add it, then put it on the selected terminals
+  // once the scan confirms it is a real PNG or JPEG.
+  function useBrowsedImage(path) {
+    root.closeBrowser()
+    if (root.addedImages.indexOf(path) >= 0 || root.builtinWallpapers.indexOf(path) >= 0) {
+      if (root.targetTakesWallpaper) root.applyWallpaperTargets({ path: path, strength: root.strength, blur: root.currentBlur })
+      return
+    }
+    root.imageApplyPath = root.targetTakesWallpaper ? path : ""
+    root.addImageSource(path)
+  }
+
+  // Keys while the browser is open. Anything not handled here falls through.
+  function browserKey(k) {
+    if (k === Qt.Key_Escape) root.closeBrowser()
+    else if (k === Qt.Key_Backspace || k === Qt.Key_Left) root.browseUp()
+    else if (k === Qt.Key_Down || k === Qt.Key_J) browseList.incrementCurrentIndex()
+    else if (k === Qt.Key_Up || k === Qt.Key_K) browseList.decrementCurrentIndex()
+    else if (k === Qt.Key_Return || k === Qt.Key_Enter || k === Qt.Key_Right) root.openBrowsed(browseList.currentIndex)
+    else if (k === Qt.Key_A) { root.addImageSource(root.browseFolder); root.closeBrowser() }
+    else if (k === Qt.Key_Slash) { browsePath.forceActiveFocus(); browsePath.selectAll() }
+    else return false
+    return true
+  }
+
   function pickSource(path) {
     root.moodSource = path
     root.ensureMoods(path)
@@ -1216,8 +1409,8 @@ Item {
       return
     }
     if (root.tab === "wallpapers") {
-      if (!root.targetTakesWallpaper || root.wallpaperChoices.length === 0) return
-      var choices = root.wallpaperChoices
+      if (!root.targetTakesWallpaper || root.shownWallpapers.length === 0) return
+      var choices = root.shownWallpapers
       var w = term.wallpaper ? choices.indexOf(term.wallpaper.path) : -1
       var wn = w < 0 ? (delta > 0 ? 0 : choices.length - 1) : (w + delta + choices.length) % choices.length
       root.applyWallpaperTargets({ path: choices[wn], strength: root.strength, blur: root.currentBlur })
@@ -1376,6 +1569,7 @@ Item {
       "sh", root.configFile, JSON.stringify({
         borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, strength: root.strength, blur: root.blur,
         hiddenSources: root.hiddenSources,
+        imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
         projects: root.projects, savedLooks: root.savedLooks
       })]
@@ -1390,6 +1584,12 @@ Item {
       if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && Array.isArray(cfg.hiddenSources)) root.hiddenSources = cfg.hiddenSources.filter(Palette.isImagePath)
+      if (cfg && Array.isArray(cfg.imageSources)) root.imageSources = Palette.normalizeImageSources(cfg.imageSources)
+      if (cfg && Array.isArray(cfg.collapsedFolders))
+        root.collapsedFolders = cfg.collapsedFolders.filter(function (k) {
+          return k === "@builtin" || k === "@files" || Palette.cleanSourcePath(k) === k
+        }).slice(0, 1000)
+      if (cfg && typeof cfg.browseFolder === "string") root.browseFolder = Palette.cleanSourcePath(cfg.browseFolder)
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.blur === "number") root.blur = Palette.normalizeBlur(cfg.blur)
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
@@ -1416,6 +1616,7 @@ Item {
       root.reapply()
     }
     root.configLoaded = true
+    root.scanImages()
     if (root.requests.length) root.scan()
     root.maybeWelcome()
   }
@@ -1458,6 +1659,9 @@ Item {
   readonly property string catalogScript:
     'printf "@@WALLPAPER %s\\n" "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n'
     + 'for f in "$HOME"/Wallpapers/Ombre/*; do [ -f "$f" ] && printf "@@OMBRE %s\\n" "$f"; done\n'
+    + 'for d in "$HOME/Pictures" "$HOME/Pictures/Wallpapers" "$HOME/Wallpapers" "$HOME/Downloads" "$HOME/.config/omarchy/backgrounds" /mnt /media "/run/media/$USER"; do\n'
+    + '  [ -d "$d" ] && printf "@@PLACE %s\\n" "$d"\n'
+    + 'done\n'
     + 'command -v ghostty >/dev/null 2>&1 && printf "@@GHOSTTY\\n"\n'
     + 'desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/com.mitchellh.ghostty.desktop"\n'
     + '[ -x "$HOME/.local/bin/ombre-ghostty" ] && grep -qx "# Written by Ombre" "$desktop" 2>/dev/null && printf "@@LAUNCHER\\n"\n'
@@ -1575,6 +1779,15 @@ Item {
     id: catalogProc
     command: ["sh", "-c", root.catalogScript]
     stdout: StdioCollector { onStreamFinished: root.onCatalog(text) }
+  }
+
+  Process {
+    id: imagesProc
+    stdout: StdioCollector { onStreamFinished: root.onImageScan(text) }
+    onExited: function (code) {
+      if (code !== 0) root.wallpaperMessage = "Could not read the added images. Ombre needs python3 for that."
+      if (root.imageScanAgain) { root.imageScanAgain = false; Qt.callLater(root.scanImages) }
+    }
   }
 
   Process {
@@ -1881,6 +2094,95 @@ Item {
     }
   }
 
+  // One wallpaper in the grid; path "" is None. Added images can be removed.
+  component WallTile: Rectangle {
+    id: wallTile
+    property string path: ""
+    property bool removable: false
+    readonly property bool chosen: root.selectedTerm !== null
+      && (root.selectedTerm.wallpaper ? root.selectedTerm.wallpaper.path === path : path === "")
+    width: Style.space(128)
+    height: Style.space(72)
+    radius: Style.cornerRadius
+    color: root.themeBackground
+    border.width: Math.max(1, Style.space(chosen ? 2 : 1))
+    border.color: chosen ? root.accent : wallArea.containsMouse ? root.text : root.subtle
+    clip: true
+    opacity: path && root.hiddenSources.indexOf(path) >= 0 ? 0.35 : 1
+
+    Image {
+      visible: wallTile.path !== ""
+      anchors.fill: parent
+      anchors.margins: parent.border.width
+      source: wallTile.path ? Palette.fileUrl(wallTile.path) : ""
+      sourceSize.width: Style.space(256)
+      fillMode: Image.PreserveAspectCrop
+      asynchronous: true
+      cache: true
+    }
+
+    Text {
+      visible: wallTile.path === ""
+      anchors.centerIn: parent
+      text: "None"
+      color: root.muted
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    MouseArea {
+      id: wallArea
+      anchors.fill: parent
+      hoverEnabled: true
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      cursorShape: root.targetTakesWallpaper ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onEntered: {
+        root.hoverText = wallTile.path ? Palette.basename(wallTile.path) : "No wallpaper"
+        if (root.selectedTakesWallpaper)
+          root.previewWallpaper(root.current, wallTile.path ? { path: wallTile.path, strength: root.strength, blur: root.currentBlur } : null)
+      }
+      onExited: { root.hoverText = ""; previewEnd.restart() }
+      onClicked: function (mouse) {
+        if (mouse.button === Qt.RightButton && wallTile.path) {
+          if (root.hiddenSources.indexOf(wallTile.path) >= 0) root.unhideSource(wallTile.path)
+          else root.hideSource(wallTile.path)
+        } else if (root.targetTakesWallpaper)
+          root.applyWallpaperTargets(wallTile.path ? { path: wallTile.path, strength: root.strength, blur: root.currentBlur } : null)
+      }
+    }
+
+    Rectangle {
+      visible: wallTile.removable && (wallArea.containsMouse || removeArea.containsMouse)
+      anchors.top: parent.top
+      anchors.right: parent.right
+      anchors.margins: Style.space(4)
+      width: Style.space(20)
+      height: width
+      radius: width / 2
+      color: root.surface
+      border.width: Math.max(1, Style.space(1))
+      border.color: removeArea.containsMouse ? root.text : root.subtle
+
+      Text {
+        anchors.centerIn: parent
+        text: "×"
+        color: root.text
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      MouseArea {
+        id: removeArea
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onEntered: root.hoverText = "Remove " + Palette.basename(wallTile.path) + " from Ombre (the file stays)"
+        onExited: root.hoverText = ""
+        onClicked: root.removeImageSource(wallTile.path)
+      }
+    }
+  }
+
   // While the picker is open every monitor dims, except a cut-out around the
   // selected terminal with a ring and its name, so you can see which real
   // window a card is. It sits on the Top layer, under the picker's Overlay.
@@ -2019,6 +2321,7 @@ Item {
           var k = event.key
           var shift = (event.modifiers & Qt.ShiftModifier) !== 0
           var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+          if (root.browsing && root.tab === "wallpapers" && !ctrl && root.browserKey(k)) { event.accepted = true; return }
           if (ctrl && k === Qt.Key_F) { terminalSearch.forceActiveFocus(); terminalSearch.selectAll() }
           else if (ctrl && k === Qt.Key_Z) root.travelHistory(root.current, shift ? "redo" : "undo")
           else if (ctrl && k === Qt.Key_Y) root.travelHistory(root.current, "redo")
@@ -2042,6 +2345,7 @@ Item {
           else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (k === Qt.Key_F && root.selectedTerm) root.saveProjectFrom(root.selectedTerm)
+          else if (k === Qt.Key_A && root.tab === "wallpapers") root.openBrowser()
           else if (root.filteredTerminals.length === 0) return
           else if (k === Qt.Key_Right || k === Qt.Key_L) root.moveCurrent(1, true)
           else if (k === Qt.Key_Left || k === Qt.Key_H) root.moveCurrent(-1, true)
@@ -2954,77 +3258,309 @@ Item {
               font.pixelSize: Style.font.bodySmall
             }
 
-            Flickable {
-              width: parent.width
-              height: Math.min(wallFlow.implicitHeight, Style.space(250))
-              contentWidth: width
-              contentHeight: wallFlow.implicitHeight
-              clip: true
-              interactive: contentHeight > height
-              boundsBehavior: Flickable.StopAtBounds
-              opacity: root.targetTakesWallpaper ? 1 : 0.4
+            Row {
+              visible: !root.browsing
+              spacing: Style.space(12)
+              WallTile { path: ""; opacity: root.targetTakesWallpaper ? 1 : 0.4 }
+              Column {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(6)
+                TextButton { label: "Add images or a folder…"; onActivated: root.openBrowser() }
+                Text {
+                  text: "From anywhere on this computer, or press A. Click a section’s name to fold it."
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
 
-              Flow {
-                id: wallFlow
+            // Folder browser: any folder on this computer. Only PNG and JPEG
+            // files are listed, the formats Ghostty can show; nothing is changed.
+            Column {
+              visible: root.browsing
+              width: parent.width
+              spacing: Style.space(8)
+
+              Row {
                 width: parent.width
                 spacing: Style.space(8)
+                TextButton { id: browseUpButton; label: "Up"; enabled: root.browseFolder !== "/"; onActivated: root.browseUp() }
+                TextField {
+                  id: browsePath
+                  objectName: "ombreBrowsePath"
+                  width: parent.width - browseUpButton.width - Style.space(8)
+                  placeholderText: "Type or paste a folder or image path, then press Enter"
+                  onAccepted: { root.browseTo(text); keyCatcher.forceActiveFocus() }
+                  Keys.onEscapePressed: { text = Palette.tildePath(root.browseFolder, root.home); keyCatcher.forceActiveFocus() }
+                  Accessible.name: "Folder or image path"
+                }
+              }
 
+              Flow {
+                width: parent.width
+                spacing: Style.space(6)
                 Repeater {
-                  model: root.opened && root.tab === "wallpapers" ? [""].concat(root.wallpaperChoices) : []
+                  model: root.browsing ? root.browsePlaces : []
+                  delegate: TextButton {
+                    required property var modelData
+                    label: modelData.name
+                    chosen: root.browseFolder === modelData.path
+                    onActivated: root.browseTo(modelData.path)
+                  }
+                }
+              }
+
+              Rectangle {
+                width: parent.width
+                height: Style.space(260)
+                radius: Style.cornerRadius
+                color: root.themeBackground
+                border.width: Math.max(1, Style.space(1))
+                border.color: root.subtle
+                clip: true
+
+                ListView {
+                  id: browseList
+                  anchors.fill: parent
+                  anchors.margins: Style.space(4)
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  // No rows (and no thumbnails read) until the browser opens.
+                  model: root.browsing ? folderModel : null
+                  FolderListModel {
+                    id: folderModel
+                    folder: Palette.fileUrl(root.browseFolder || root.home || "/")
+                    nameFilters: ["*.png", "*.jpg", "*.jpeg"]
+                    caseSensitive: false
+                    showDirsFirst: true
+                    showDotAndDotDot: false
+                    showHidden: false
+                    showOnlyReadable: true
+                    sortCaseSensitive: false
+                    onFolderChanged: browseList.currentIndex = 0
+                  }
 
                   delegate: Rectangle {
-                    id: wallTile
-                    required property var modelData
-                    readonly property bool chosen: root.selectedTerm !== null
-                      && (root.selectedTerm.wallpaper ? root.selectedTerm.wallpaper.path === modelData : modelData === "")
-                    width: Style.space(128)
-                    height: Style.space(72)
+                    id: browseRow
+                    required property int index
+                    required property string fileName
+                    required property string filePath
+                    required property bool fileIsDir
+                    width: ListView.view.width
+                    height: Style.space(44)
                     radius: Style.cornerRadius
-                    color: root.themeBackground
-                    border.width: Math.max(1, Style.space(chosen ? 2 : 1))
-                    border.color: chosen ? root.accent : wallArea.containsMouse ? root.text : root.subtle
-                    clip: true
+                    color: ListView.isCurrentItem || rowArea.containsMouse ? Color.menu.selectedBackground : "transparent"
 
-                    Image {
-                      visible: wallTile.modelData !== ""
+                    MouseArea {
+                      id: rowArea
                       anchors.fill: parent
-                      anchors.margins: parent.border.width
-                      source: wallTile.modelData ? Palette.fileUrl(wallTile.modelData) : ""
-                      sourceSize.width: Style.space(256)
-                      fillMode: Image.PreserveAspectCrop
-                      asynchronous: true
-                      cache: true
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onEntered: {
+                        browseList.currentIndex = browseRow.index
+                        root.hoverText = browseRow.fileIsDir ? "" : browseRow.fileName
+                        if (!browseRow.fileIsDir && root.selectedTakesWallpaper)
+                          root.previewWallpaper(root.current, { path: browseRow.filePath, strength: root.strength, blur: root.currentBlur })
+                      }
+                      onExited: { root.hoverText = ""; previewEnd.restart() }
+                      onClicked: root.openBrowsed(browseRow.index)
+                    }
+
+                    Item {
+                      id: browseThumb
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(64)
+                      height: Style.space(36)
+
+                      // A plain drawn folder, so no icon font is needed.
+                      Item {
+                        visible: browseRow.fileIsDir
+                        anchors.centerIn: parent
+                        width: Style.space(30)
+                        height: Style.space(22)
+                        Rectangle { x: 0; y: 0; width: parent.width * 0.45; height: parent.height * 0.3; radius: Style.space(2); color: root.muted }
+                        Rectangle { x: 0; y: parent.height * 0.18; width: parent.width; height: parent.height * 0.82; radius: Style.space(3); color: root.muted }
+                      }
+
+                      Image {
+                        visible: !browseRow.fileIsDir
+                        anchors.fill: parent
+                        source: browseRow.fileIsDir ? "" : Palette.fileUrl(browseRow.filePath)
+                        sourceSize.height: Style.space(72)
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        cache: false
+                      }
                     }
 
                     Text {
-                      visible: wallTile.modelData === ""
-                      anchors.centerIn: parent
-                      text: "None"
-                      color: root.muted
+                      anchors.left: browseThumb.right
+                      anchors.leftMargin: Style.space(10)
+                      anchors.right: rowAdd.visible ? rowAdd.left : parent.right
+                      anchors.rightMargin: Style.space(8)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: browseRow.fileName
+                      elide: Text.ElideMiddle
+                      color: root.text
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
                     }
 
-                    opacity: wallTile.modelData && root.hiddenSources.indexOf(wallTile.modelData) >= 0 ? 0.35 : 1
+                    TextButton {
+                      id: rowAdd
+                      visible: browseRow.fileIsDir
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      label: "Add folder"
+                      onActivated: { root.addImageSource(browseRow.filePath); root.closeBrowser() }
+                    }
+                  }
+                }
 
-                    MouseArea {
-                      id: wallArea
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      acceptedButtons: Qt.LeftButton | Qt.RightButton
-                      cursorShape: root.targetTakesWallpaper ? Qt.PointingHandCursor : Qt.ArrowCursor
-                      onEntered: {
-                        root.hoverText = wallTile.modelData ? Palette.basename(wallTile.modelData) : "No wallpaper"
-                        if (root.selectedTakesWallpaper)
-                          root.previewWallpaper(root.current, wallTile.modelData ? { path: wallTile.modelData, strength: root.strength, blur: root.currentBlur } : null)
+                Text {
+                  anchors.centerIn: parent
+                  visible: folderModel.status === FolderListModel.Ready && folderModel.count === 0
+                  text: "No folders or PNG/JPEG images here."
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+
+              Row {
+                spacing: Style.space(8)
+                TextButton {
+                  label: "Add this folder"
+                  enabled: root.browseFolder !== ""
+                  onActivated: { root.addImageSource(root.browseFolder); root.closeBrowser() }
+                }
+                TextButton { label: "Close"; onActivated: root.closeBrowser() }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Click an image to use it, or add a whole folder. Only PNG and JPEG files are listed: those are the formats Ghostty can show. Nothing is copied or changed. "
+                  + "Keys: ↑ ↓ move, Enter opens, Backspace goes up, A adds this folder, / types a path, Esc closes."
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Flickable {
+              visible: !root.browsing
+              width: parent.width
+              height: Math.min(wallSections.implicitHeight, Style.space(320))
+              contentWidth: width
+              contentHeight: wallSections.implicitHeight
+              clip: true
+              interactive: contentHeight > height
+              boundsBehavior: Flickable.StopAtBounds
+
+              Column {
+                id: wallSections
+                width: parent.width
+                spacing: Style.space(10)
+
+                Repeater {
+                  model: root.opened && root.tab === "wallpapers" && !root.browsing ? root.wallpaperSections : []
+
+                  delegate: Column {
+                    id: wallSection
+                    required property var modelData
+                    readonly property int indent: Style.space(18) * modelData.depth
+                    width: wallSections.width
+                    spacing: Style.space(6)
+
+                    Item {
+                      x: wallSection.indent
+                      width: parent.width - x
+                      height: Math.max(sectionText.implicitHeight, sectionRemove.visible ? sectionRemove.height : 0)
+
+                      Column {
+                        id: sectionText
+                        anchors.left: parent.left
+                        anchors.right: sectionRemove.visible ? sectionRemove.left : parent.right
+                        anchors.rightMargin: Style.space(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(2)
+
+                        Row {
+                          spacing: Style.space(8)
+                          Text {
+                            visible: !wallSection.modelData.empty
+                            text: wallSection.modelData.collapsed ? "▸" : "▾"
+                            color: sectionArea.containsMouse ? root.text : root.muted
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.body
+                          }
+                          Text {
+                            id: sectionTitle
+                            text: wallSection.modelData.title
+                            color: root.text
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.body
+                            font.bold: wallSection.modelData.depth === 0
+                          }
+                          Text {
+                            anchors.baseline: sectionTitle.baseline
+                            visible: !wallSection.modelData.empty
+                            text: wallSection.modelData.count + (wallSection.modelData.count === 1 ? " image" : " images")
+                            color: root.muted
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                          }
+                        }
+
+                        Text {
+                          visible: text !== ""
+                          width: parent.width
+                          elide: Text.ElideMiddle
+                          text: [wallSection.modelData.detail, wallSection.modelData.note].filter(function (t) { return t }).join(" · ")
+                          color: root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
                       }
-                      onExited: { root.hoverText = ""; previewEnd.restart() }
-                      onClicked: function (mouse) {
-                        if (mouse.button === Qt.RightButton && wallTile.modelData) {
-                          if (root.hiddenSources.indexOf(wallTile.modelData) >= 0) root.unhideSource(wallTile.modelData)
-                          else root.hideSource(wallTile.modelData)
-                        } else if (root.targetTakesWallpaper)
-                          root.applyWallpaperTargets(wallTile.modelData ? { path: wallTile.modelData, strength: root.strength, blur: root.currentBlur } : null)
+
+                      MouseArea {
+                        id: sectionArea
+                        anchors.fill: sectionText
+                        hoverEnabled: true
+                        enabled: !wallSection.modelData.empty
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.toggleSection(wallSection.modelData.key)
+                      }
+
+                      TextButton {
+                        id: sectionRemove
+                        visible: wallSection.modelData.source !== ""
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        label: "Remove"
+                        onActivated: root.removeImageSource(wallSection.modelData.source)
+                      }
+                    }
+
+                    Flow {
+                      visible: wallSection.modelData.images.length > 0
+                      x: wallSection.indent
+                      width: parent.width - x
+                      spacing: Style.space(8)
+                      opacity: root.targetTakesWallpaper ? 1 : 0.4
+
+                      Repeater {
+                        model: wallSection.modelData.images
+                        delegate: WallTile {
+                          required property var modelData
+                          path: modelData
+                          removable: wallSection.modelData.removableImages
+                        }
                       }
                     }
                   }

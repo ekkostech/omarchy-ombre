@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""List the wallpapers inside the files and folders added to Ombre.
+
+Sources arrive as arguments. Only real PNG and JPEG files are listed (the two
+formats Ghostty can draw), checked by their first bytes rather than trusting
+the name. Folders are read a few levels deep, hidden entries are skipped and
+symlinked folders are not followed, so a loop or a huge tree cannot stall the
+picker. Prints one JSON object: {"sources": [...]} in argument order."""
+import json
+import os
+import stat
+import sys
+
+EXTENSIONS = (".png", ".jpg", ".jpeg")
+SIGNATURES = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")
+MAX_DEPTH = 3          # the added folder is depth 0
+MAX_IMAGES = 400       # per source
+MAX_FOLDERS = 400      # folders visited per source
+
+
+def usable_path(path):
+    return os.path.isabs(path) and not any(c in path for c in ("\n", "\r", '"'))
+
+
+def is_image(path):
+    """A regular PNG or JPEG file, judged by name and by its first bytes."""
+    if not path.lower().endswith(EXTENSIONS) or not usable_path(path):
+        return False
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return False
+        with open(path, "rb") as f:
+            head = f.read(8)
+    except OSError:
+        return False
+    return any(head.startswith(s) for s in SIGNATURES)
+
+
+def sort_key(name):
+    return (name.casefold(), name)
+
+
+def scan_folder(root):
+    groups, budget, folders = [], [MAX_IMAGES], [0]
+    truncated = False
+
+    def walk(folder, depth):
+        nonlocal truncated
+        folders[0] += 1
+        try:
+            with os.scandir(folder) as it:
+                entries = sorted((e for e in it if not e.name.startswith(".")), key=lambda e: sort_key(e.name))
+        except OSError:
+            return 0
+        images, subdirs = [], []
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    subdirs.append(e.path)
+                elif e.name.lower().endswith(EXTENSIONS):
+                    if budget[0] <= 0:
+                        truncated = True
+                    elif is_image(e.path):
+                        images.append(e.path)
+                        budget[0] -= 1
+            except OSError:
+                continue
+        group = {"dir": folder, "depth": depth, "images": images, "total": len(images)}
+        at = len(groups)
+        groups.append(group)
+        for sub in subdirs:
+            if depth + 1 > MAX_DEPTH or folders[0] >= MAX_FOLDERS:
+                truncated = True
+                break
+            group["total"] += walk(sub, depth + 1)
+        if group["total"] == 0 and depth > 0:
+            del groups[at:]   # folders without wallpapers anywhere below are left out
+        return group["total"]
+
+    walk(root, 0)
+    return groups, truncated
+
+
+def scan(source):
+    out = {"path": source, "kind": "missing", "images": [], "groups": [], "truncated": False}
+    if not usable_path(source):
+        out["kind"] = "unsupported"
+        return out
+    try:
+        mode = os.stat(source).st_mode
+    except OSError:
+        return out
+    if stat.S_ISDIR(mode):
+        out["kind"] = "folder"
+        out["groups"], out["truncated"] = scan_folder(source)
+        out["images"] = [p for g in out["groups"] for p in g["images"]]
+    elif is_image(source):
+        out["kind"] = "file"
+        out["images"] = [source]
+    else:
+        out["kind"] = "unsupported"
+    return out
+
+
+def main(argv):
+    json.dump({"sources": [scan(s) for s in argv]}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

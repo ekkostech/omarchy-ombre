@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.0 — 2026-10-11
+- Add wallpapers from anywhere: **Add images or a folder…** in Wallpapers (or `A`) opens a folder browser with quick places (Home, Pictures, Downloads, drives) and a path box that takes `~`. Click an image to use it, or add a whole folder; `ombre images add|list|remove` does the same from a shell.
+- Added folders are foldable sections, nested for the folders inside them (three levels deep, up to 400 images per folder). Folding is remembered, a newly added folder opens with its inner folders folded, and `Space` steps only through what's on show. Added images come before the built-in wallpapers, and None is always at hand.
+- Only real PNG and JPEG files are read, the formats Ghostty can show: files are checked by their contents, not their names, and hidden files and symlinked folders are skipped. Nothing is copied or changed; Remove only takes a source back out of the picker.
+
 ## 1.6.0 — 2026-10-10
 - Adjustable wallpaper blur from Off to 40, with a slider and reset control in Wallpapers. Text remains sharp and original image files are never modified.
 - Blur follows saved looks, project/default rules, batch styling, undo and redo. The CLI supports `ombre blur AMOUNT` and `--blur` when choosing wallpapers.

@@ -45,6 +45,7 @@ mood or theme to try it on the real window, click to keep it.
 - **Aether moods**: Fire, Ocean, Forest, Neon, Sunset, Vaporwave, Midnight, Aurora and the rest of Aether's modes, generated from your current wallpaper or any wallpaper in Aether's library.
 - **Themes per terminal**: give one terminal Tokyo Night and another Gruvbox. Every installed Omarchy theme is listed with its wallpaper, including themes Aether made.
 - **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength (Faint, Soft, Medium, Strong) keeps text readable on light and dark pictures.
+- **Images from anywhere**: in Wallpapers, **Add images or a folder…** (or `A`) opens a browser for any folder on the computer, including other drives. Click an image to use it, or add a whole folder. Added folders show as sections, with the folders inside them as their own sections; click a name to fold it, and the fold is remembered. Only real PNG and JPEG files are listed, the two formats Ghostty can show: Ombre checks each file's contents, so a WebP renamed to `.jpg` is left out. Nothing is copied or changed, and **Remove** only takes a folder back out of the picker.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
 - **Matching borders**: the Hyprland border takes the look's accent color, bright on the focused window and dark on the others so you can still see focus move (press `B` to turn it off).
 - **Solid Ghostty windows**: Omarchy makes every window slightly see-through (a little more when it isn't focused), which lets the desktop wallpaper show through a terminal's own wallpaper. Ombre makes Ghostty windows fully opaque, on by default. Press `O` or click "Solid Ghostty" to give Omarchy's transparency back; each window returns to exactly the opacity it had.
@@ -110,6 +111,7 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo the active terminal’s last change |
 | `Tab` | Switch between Saved looks, Moods, Themes, Wallpapers and Projects & new terminals |
 | `W` / `Shift+W` | Next / previous wallpaper to make moods from |
+| `A` | Wallpapers tab: add images or a folder from anywhere. In the browser: `↑`/`↓` move, `Enter` opens, `Backspace` goes up, `A` adds the folder, `/` types a path, `Esc` closes |
 | `X` | Hide that wallpaper from the strips (right-click does too; files are untouched) |
 | `H` | Show / hide the hidden ones |
 | Arrows / `hjkl` | Move between terminals |
@@ -172,6 +174,9 @@ ombre theme:tokyo-night --pid 1234
 ombre wallpaper ~/Wallpapers/forest.jpg --strength 0.15  # Ghostty
 ombre wallpaper none
 ombre --looks              # list moods, themes and wallpapers
+ombre images add ~/Pictures/walls /mnt/photos/sunset.jpg   # PNG/JPEG files or folders, from anywhere
+ombre images list          # added files and folders, and how many images each holds
+ombre images remove ~/Pictures/walls   # the files stay where they are
 ombre --check              # what's installed and what's missing
 ombre borders off
 ombre pulse off            # or on; 'pulse now --title api' to try it
