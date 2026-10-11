@@ -4,10 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {spawnSync} = require('node:child_process');
+const quickshell = require('./quickshell');
 const repo = path.resolve(__dirname, '..');
 const shell = process.env.OMARCHY_PATH || '/usr/share/omarchy';
-const available = fs.existsSync(path.join(shell, 'shell/Commons')) && spawnSync('quickshell', ['--version']).status === 0;
+const available = quickshell.available(shell);
 
 test('real mood/theme card clicks survive Qt modelData array conversion', {skip: !available}, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ombre-picker-test-'));
@@ -63,7 +63,7 @@ ShellRoot {
  }
 }
 `);
-    const result = spawnSync('quickshell', ['-p', dir], {encoding:'utf8', timeout:10000});
+    const result = quickshell.run(dir);
     const output = result.stdout + result.stderr;
     assert.equal(result.status, 0, output);
     assert.match(output, /OMBRE_PICKER_QT_PASS/, output);

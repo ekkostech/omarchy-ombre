@@ -3,10 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {spawnSync} = require('node:child_process');
+const quickshell = require('./quickshell');
 const repo = path.resolve(__dirname,'..');
 const shell = process.env.OMARCHY_PATH || '/usr/share/omarchy';
-const available = fs.existsSync(path.join(shell,'shell/Commons')) && spawnSync('quickshell',['--version']).status===0;
+const available = quickshell.available(shell);
 test('real picker library, batch scope, filtering and atomic undo/redo work together', {skip:!available}, () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ombre-workspace-test-'));
  try {
@@ -91,7 +91,7 @@ ShellRoot {
  Timer { interval:5000; running:true; onTriggered:Qt.quit() }
 }
 `);
-  const result=spawnSync('quickshell',['-p',dir],{encoding:'utf8',timeout:10000,env:{...process.env,XDG_CONFIG_HOME:dir}});
+  const result=quickshell.run(dir,{XDG_CONFIG_HOME:dir});
   const output=result.stdout+result.stderr;
   assert.equal(result.status,0,output);
   assert.match(output,/OMBRE_WORKSPACE_QT_PASS/,output);
@@ -129,7 +129,7 @@ ShellRoot {
  Timer { interval:1000; running:true; onTriggered:Qt.quit() }
 }
 `);
-   const result=spawnSync('quickshell',['-p',dir],{encoding:'utf8',timeout:10000,env:{...process.env,XDG_CONFIG_HOME:dir}});
+   const result=quickshell.run(dir,{XDG_CONFIG_HOME:dir});
    assert.equal(result.status,0,result.stdout+result.stderr);
    assert.doesNotMatch(result.stdout+result.stderr,/Error:|TypeError:|ReferenceError:|Binding loop/);
    return result.stdout+result.stderr;
