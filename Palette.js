@@ -853,3 +853,40 @@ function visibleImages(sections) {
   });
   return out;
 }
+
+// ---- Glass ------------------------------------------------------------------
+// Glass tints the blurred wallpaper behind coloured blocks. Its colour is
+// "auto" (each terminal's own background, so glass follows the look) or a
+// fixed #rrggbb; tint is how much of that colour covers the wallpaper.
+var GLASS_TINT = 86;
+var GLASS_BLUR = 36;
+
+// Smoke plus deep versions of the hues, dark enough to keep light text readable.
+function glassSwatches() {
+  return [{ id: "smoke", name: "Smoke", hex: "#000000" }].concat(HUES.map(function (h) {
+    return { id: h.id, name: h.name, hex: mix(h.hex, "#000000", 0.55) };
+  }));
+}
+
+// "auto", a swatch name or a hex colour, as stored; "" when it isn't one.
+function glassColor(value) {
+  var v = String(value === undefined || value === null ? "" : value).trim().toLowerCase();
+  if (v === "auto") return "auto";
+  if (/^#?[0-9a-f]{6}$/.test(v)) return v.charAt(0) === "#" ? v : "#" + v;
+  var s = glassSwatches().filter(function (g) { return g.id === v; })[0];
+  return s ? s.hex : "";
+}
+
+function glassLevel(value, max, fallback) {
+  var n = Math.round(Number(value));
+  return isFinite(n) && String(value).trim() !== "" ? Math.max(0, Math.min(max, n)) : fallback;
+}
+
+// The window's shader token: glass:RRGGBB:TINT:BLUR, plus -dark or -light when
+// the text shadow is on too. background is the terminal's own background.
+function glassToken(color, tint, blur, background, shadow) {
+  var c = color === "auto" ? String(background || "") : String(color || "");
+  var m = /^#(?:[0-9a-f]{2})?([0-9a-f]{6})$/i.exec(c);
+  return "glass:" + (m ? m[1].toLowerCase() : "000000") + ":" + glassLevel(tint, 100, GLASS_TINT) + ":"
+    + glassLevel(blur, 60, GLASS_BLUR) + (shadow === "dark" || shadow === "light" ? "-" + shadow : "");
+}

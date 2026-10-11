@@ -70,6 +70,9 @@ Item {
   property string agentThemeAction: "status"
   property bool textShadow: false
   property bool glass: false           // coloured cell backgrounds as frosted glass (Ghostty wallpaper windows)
+  property string glassColor: "auto"   // "auto" follows each terminal's look, or #rrggbb
+  property int glassTint: Palette.GLASS_TINT
+  property int glassBlur: Palette.GLASS_BLUR
   property var hiddenSources: []     // wallpaper paths hidden from the strips (files untouched)
   property bool showHidden: false
   property bool reshadowAll: false
@@ -310,6 +313,7 @@ Item {
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
       wallpapers: root.wallpaperChoices,
+      glass: { on: root.glass, color: root.glassColor, tint: root.glassTint, blur: root.glassBlur },
       imageSources: root.imageSources.map(function (p) {
         var s = root.imageScan[p]
         return { path: p, kind: s ? s.kind : "reading", count: s ? s.images.length : 0 }
@@ -376,15 +380,39 @@ Item {
     return "ok"
   }
 
+  // Glass colour: "auto", a swatch name (smoke, red, blue, ...) or #rrggbb.
+  function setGlassColor(value) {
+    var c = Palette.glassColor(value)
+    if (!c) return "error: glass colour is auto, a colour name or #rrggbb"
+    root.glassColor = c
+    root.applyGlassSettings()
+    return "ok"
+  }
+
+  function setGlassTint(value) { root.glassTint = Palette.glassLevel(value, 100, root.glassTint); root.applyGlassSettings(); return "ok" }
+  function setGlassBlur(value) { root.glassBlur = Palette.glassLevel(value, 60, root.glassBlur); root.applyGlassSettings(); return "ok" }
+
+  function resetGlass() {
+    root.glassColor = "auto"
+    root.glassTint = Palette.GLASS_TINT
+    root.glassBlur = Palette.GLASS_BLUR
+    root.applyGlassSettings()
+    return "ok"
+  }
+
+  function applyGlassSettings() {
+    root.saveConfig()
+    if (!root.glass) return
+    root.reshadowAll = true
+    root.scan()
+  }
+
   // The shader token for a window's Ghostty config: dark, light or - for the
-  // text shadow, prefixed with glass when Glass is on (glass, glass-dark, glass-light).
+  // text shadow; with Glass on, glass:RRGGBB:TINT:BLUR plus -dark or -light.
   function shadowVariant(term) {
-    var shadow = "-"
-    if (root.textShadow) {
-      var bg = (term && Palette.lookBackground(term.look, root.themeBackground)) || root.themeBackground
-      shadow = Palette.isLight(bg) ? "light" : "dark"
-    }
-    return root.glass ? (shadow === "-" ? "glass" : "glass-" + shadow) : shadow
+    var bg = (term && Palette.lookBackground(term.look, root.themeBackground)) || root.themeBackground
+    var shadow = root.textShadow ? (Palette.isLight(bg) ? "light" : "dark") : "-"
+    return root.glass ? Palette.glassToken(root.glassColor, root.glassTint, root.glassBlur, bg, shadow) : shadow
   }
 
   // Omarchy dims every window a little (0.985 focused, 0.96 not), which lets the desktop
@@ -1583,7 +1611,7 @@ Item {
     root.configDirty = false
     configWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$(dirname "$1")" && tmp=$(mktemp "$1.XXXXXX") && { printf "%s\\n" "$2" > "$tmp" && mv -f "$tmp" "$1"; }',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, glass: root.glass, strength: root.strength, blur: root.blur,
+        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, glass: root.glass, glassColor: root.glassColor, glassTint: root.glassTint, glassBlur: root.glassBlur, strength: root.strength, blur: root.blur,
         hiddenSources: root.hiddenSources,
         imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
@@ -1600,6 +1628,9 @@ Item {
       if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && typeof cfg.glass === "boolean") root.glass = cfg.glass
+      if (cfg && Palette.glassColor(cfg.glassColor)) root.glassColor = Palette.glassColor(cfg.glassColor)
+      if (cfg && typeof cfg.glassTint === "number") root.glassTint = Palette.glassLevel(cfg.glassTint, 100, Palette.GLASS_TINT)
+      if (cfg && typeof cfg.glassBlur === "number") root.glassBlur = Palette.glassLevel(cfg.glassBlur, 60, Palette.GLASS_BLUR)
       if (cfg && Array.isArray(cfg.hiddenSources)) root.hiddenSources = cfg.hiddenSources.filter(Palette.isImagePath)
       if (cfg && Array.isArray(cfg.imageSources)) root.imageSources = Palette.normalizeImageSources(cfg.imageSources)
       if (cfg && Array.isArray(cfg.collapsedFolders))
@@ -1715,8 +1746,9 @@ Item {
   //   save PTY JSON          remember the look for the picker
   //   forget PTY
   //   ghostty PID CONFDIR SHADOW COLORS STRENGTH BLUR PATH   per-window wallpaper and shaders, then SIGUSR2
-  //     SHADOW is dark, light or -, prefixed with glass when Glass is on (glass, glass-dark, glass-light);
-  //     STRENGTH BLUR PATH are "- 0 -" for no wallpaper. Glass needs a wallpaper to show through.
+  //     SHADOW is dark, light or -; with Glass on, glass:RRGGBB:TINT:BLUR plus -dark or -light,
+  //     written into a per-window shader by bin/ombre-glass. STRENGTH BLUR PATH are "- 0 -" for
+  //     no wallpaper; Glass needs a wallpaper to show through.
   readonly property string writerScript:
     'umask 077; d=$1; plug=$2; mkdir -p "$d/ghostty" 2>/dev/null\n'
     + 'if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then echo "ombre: $d is not a private directory owned by you" >&2; exit 1; fi\n'
@@ -1737,8 +1769,15 @@ Item {
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
     + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; rest=${rest#* }; blur=${rest%% *}; path=${rest#* }\n'
     + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
-    + '      glass=; case $shadow in glass) glass=1; shadow=- ;; glass-*) glass=1; shadow=${shadow#glass-} ;; esac\n'
+    + '      glass=; case $shadow in glass*)\n'
+    + '        glass=${shadow%%-*}; case $shadow in *-dark) shadow=dark ;; *-light) shadow=light ;; *) shadow=- ;; esac\n'
+    + '        ;;\n'
+    + '      esac\n'
     + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
+    + '      if [ -n "$glass" ]; then\n'
+    + '        old=$IFS; IFS=:; set -- $glass; IFS=$old; glass=\n'
+    + '        if [ "$strength" != "-" ]; then glass=$(python3 -I "$plug/bin/ombre-glass" --dir "$cdir" --pid "$key" --color "${2:-000000}" --tint "${3:-86}" --blur "${4:-36}") || glass=; fi\n'
+    + '      fi\n'
     + '      if [ "$strength" != "-" ] && [ "$blur" != "0" ]; then\n'
     + '        if prepared=$(printf "%s\\n" "$path" | timeout 15 python3 -I "$plug/bin/ombre-blur" --amount "$blur"); then path=$prepared; else printf "wallpaper-error\\n"; continue; fi\n'
     + '      fi\n'
@@ -1747,14 +1786,14 @@ Item {
     + '        if [ "$colors" != "-" ]; then printf "%s\\n" "$colors" | tr ";" "\\n"; fi\n'
     // Glass runs first: it reads the cell layers by alpha and hands an opaque frame on.
     + '        if [ -n "$glass" ] && [ "$strength" != "-" ]; then\n'
-    + '          printf "custom-shader = \\"%s/shaders/glass.glsl\\"\\n" "$plug"\n'
+    + '          printf "custom-shader = \\"%s\\"\\n" "$glass"\n'
     + '          echo "background-opacity = 0.5"\n'
     + '          echo "background-opacity-cells = true"\n'
     + '        else glass=; fi\n'
     + '        case $shadow in dark|light)\n'
     + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow" ;;\n'
     + '        esac\n'
-    + '        case $glass$shadow in 1*|dark|light) echo "custom-shader-animation = false" ;; esac\n'
+    + '        case $glass$shadow in /*|dark|light) echo "custom-shader-animation = false" ;; esac\n'
     + '        if [ "$strength" != "-" ]; then\n'
     + '          printf "background-image = \\"%s\\"\\n" "$path"\n'
     + '          echo "background-image-fit = cover"\n'
@@ -3279,6 +3318,136 @@ Item {
                 font.pixelSize: Style.font.bodySmall
               }
               TextButton { label: "Reset blur"; enabled: root.targetTakesWallpaper; onActivated: root.setBlur(0) }
+            }
+
+            // Glass: frosted glass behind coloured blocks, in a colour of your choosing.
+            Column {
+              visible: root.catalog.launcher
+              width: parent.width
+              spacing: Style.space(8)
+
+              Row {
+                spacing: Style.space(10)
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Glass"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                TextButton { label: root.glass ? "On" : "Off"; chosen: root.glass; onActivated: root.setGlass(!root.glass) }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Frosted glass behind Claude’s message band and other coloured blocks, over the wallpaper. G toggles it."
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Row {
+                visible: root.glass
+                spacing: Style.space(8)
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Colour"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                TextButton {
+                  label: "Auto"
+                  chosen: root.glassColor === "auto"
+                  onActivated: root.setGlassColor("auto")
+                  HoverHandler { onHoveredChanged: root.hoverText = hovered ? "Auto: each terminal’s glass takes its own look’s colour" : "" }
+                }
+                Repeater {
+                  model: Palette.glassSwatches()
+                  delegate: Rectangle {
+                    required property var modelData
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: root.swatchSize
+                    height: width
+                    radius: width / 2
+                    color: modelData.hex
+                    border.width: root.glassColor === modelData.hex ? Math.max(2, Style.space(2)) : Math.max(1, Style.space(1))
+                    border.color: root.glassColor === modelData.hex ? root.text : root.subtle
+                    MouseArea {
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onEntered: root.hoverText = modelData.name + " glass"
+                      onExited: root.hoverText = ""
+                      onClicked: root.setGlassColor(modelData.hex)
+                    }
+                  }
+                }
+                ColorField {
+                  anchors.verticalCenter: parent.verticalCenter
+                  value: root.glassColor === "auto" ? "" : root.glassColor
+                  onApplied: function(value) { root.setGlassColor(value) }
+                }
+              }
+
+              Row {
+                visible: root.glass
+                spacing: Style.space(10)
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Tint"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                PanelSlider {
+                  id: glassTintSlider
+                  width: Style.space(160)
+                  minimum: 0
+                  maximum: 100
+                  step: 1
+                  integer: true
+                  value: root.glassTint
+                  fillColor: root.accent
+                  knobColor: root.accent
+                  onReleased: function(value) { root.setGlassTint(value) }
+                  Accessible.name: "Glass tint"
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Math.round(glassTintSlider.liveValue) + "%"
+                  color: root.text
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Blur"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                PanelSlider {
+                  id: glassBlurSlider
+                  width: Style.space(160)
+                  minimum: 0
+                  maximum: 60
+                  step: 1
+                  integer: true
+                  value: root.glassBlur
+                  fillColor: root.accent
+                  knobColor: root.accent
+                  onReleased: function(value) { root.setGlassBlur(value) }
+                  Accessible.name: "Glass blur"
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Math.round(glassBlurSlider.liveValue) === 0 ? "Off" : String(Math.round(glassBlurSlider.liveValue))
+                  color: root.text
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                TextButton { label: "Reset glass"; onActivated: root.resetGlass() }
+              }
             }
             Text {
               visible: root.wallpaperMessage !== ""

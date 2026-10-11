@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.0 — 2026-10-11
+- Glass colour: **Auto** (each terminal's glass takes its own look's colour), Smoke, deep versions of the eight hues, or any `#rrggbb`. **Tint** (how much the colour covers the wallpaper) and **Blur** (how soft it is) have sliders, with Reset glass. All in Wallpapers, and `ombre glass color|tint|blur|reset` from a shell.
+- Ghostty shaders take no settings, so `bin/ombre-glass` writes each window its own copy of the glass shader, privately next to its config. The name carries a hash of the contents, so Ghostty recompiles exactly when something changes; a window's old copy is removed. If the copy can't be written, the window gets no glass rather than a half see-through background.
+
 ## 1.8.1 — 2026-10-11
 - Glass is darker. Shaders work in linear light, so the old setting only looked about 40% darker than the wallpaper; it now looks about 60% darker, like smoked glass, which keeps text in Claude's message band and on bright wallpapers easy to read.
 

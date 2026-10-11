@@ -23,6 +23,10 @@
 #   ombre pulse on|off         pulse a terminal's border when its agent finishes
 #   ombre shadow on|off        drop shadow under the text (Ghostty windows)
 #   ombre glass on|off         frosted dark glass behind coloured blocks like Claude's message band (Ghostty wallpaper windows)
+#   ombre glass color auto|smoke|red|...|'#2a1040'   glass colour (auto follows each terminal's look)
+#   ombre glass tint 0-100     how much the colour covers the wallpaper (86 by default)
+#   ombre glass blur 0-60      how soft the wallpaper behind the glass is (36 by default)
+#   ombre glass reset | ombre glass   back to the defaults | show the glass settings
 #   ombre solid on|off         Ghostty windows fully opaque (Omarchy dims windows a little; on by default)
 #   ombre pulse now|stop       start or stop a pulse by hand (with a target)
 #   ombre project from                 use the focused terminal's look for its project folder
@@ -163,7 +167,16 @@ case ${1:-} in
     case ${2:-} in on) call setTextShadow true ;; off) call setTextShadow false ;; *) usage 1 ;; esac
     exit ;;
   glass)
-    case ${2:-} in on) call setGlass true ;; off) call setGlass false ;; *) usage 1 ;; esac
+    case ${2:-} in
+      "") omarchy-shell shell call "$id" looks "" | jq -r '.glass | "glass \(if .on then "on" else "off" end) · colour \(.color) · tint \(.tint) · blur \(.blur)"' ;;
+      on) call setGlass true ;;
+      off) call setGlass false ;;
+      color|colour) [[ -n ${3:-} ]] || usage 1; call setGlassColor "$3" ;;
+      tint) [[ ${3:-} =~ ^[0-9]+$ ]] && ((10#$3 <= 100)) || usage 1; call setGlassTint "$3" ;;
+      blur) [[ ${3:-} =~ ^[0-9]+$ ]] && ((10#$3 <= 60)) || usage 1; call setGlassBlur "$3" ;;
+      reset) call resetGlass "" ;;
+      *) usage 1 ;;
+    esac
     exit ;;
   solid)
     case ${2:-} in on) call setSolid true ;; off) call setSolid false ;; *) usage 1 ;; esac
