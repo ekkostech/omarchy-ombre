@@ -10,7 +10,7 @@
 // into tinted glass. Everything comes back opaque, so the window stays solid.
 const float A = 0.5;                       // background-opacity Ombre sets with glass
 const float CELL = A + A * (1.0 - A);      // alpha of a cell background
-const float DARK = 0.68;                   // how dark the glass is (0 clear, 1 black)
+const float DARK = 0.86;                   // how dark the glass is, in linear light (0.86 reads about 60% darker)
 const float RADIUS = 36.0;                 // blur radius in pixels
 const int TAPS = 80;
 

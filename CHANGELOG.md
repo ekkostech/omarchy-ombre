@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.8.1 — 2026-10-11
+- Glass is darker. Shaders work in linear light, so the old setting only looked about 40% darker than the wallpaper; it now looks about 60% darker, like smoked glass, which keeps text in Claude's message band and on bright wallpapers easy to read.
+
 ## 1.8.0 — 2026-10-11
 - Glass: blocks an app paints with its own background (Claude Code's message band, Codex panels, selections, status bars) become frosted glass over the terminal's wallpaper, blurred and darkened, with the text kept sharp. Dark blocks become dark glass and coloured ones keep their tint. Toggle with `G`, the **Glass** button or `ombre glass on|off`; it applies to Ghostty windows with a wallpaper.
 - How it works: with Glass on, Ombre runs the window at `background-opacity = 0.5` with `background-opacity-cells`, so each layer reaches the shader with its own alpha. `shaders/glass.glsl` recovers the wallpaper behind cell backgrounds, blurs and darkens it there, and returns the whole frame opaque, so the window stays solid.
