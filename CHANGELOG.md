@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.0 — 2026-10-11
+- Glass: blocks an app paints with its own background (Claude Code's message band, Codex panels, selections, status bars) become frosted glass over the terminal's wallpaper, blurred and darkened, with the text kept sharp. Dark blocks become dark glass and coloured ones keep their tint. Toggle with `G`, the **Glass** button or `ombre glass on|off`; it applies to Ghostty windows with a wallpaper.
+- How it works: with Glass on, Ombre runs the window at `background-opacity = 0.5` with `background-opacity-cells`, so each layer reaches the shader with its own alpha. `shaders/glass.glsl` recovers the wallpaper behind cell backgrounds, blurs and darkens it there, and returns the whole frame opaque, so the window stays solid.
+
 ## 1.7.0 — 2026-10-11
 - Add wallpapers from anywhere: **Add images or a folder…** in Wallpapers (or `A`) opens a folder browser with quick places (Home, Pictures, Downloads, drives) and a path box that takes `~`. Click an image to use it, or add a whole folder; `ombre images add|list|remove` does the same from a shell.
 - Added folders are foldable sections, nested for the folders inside them (three levels deep, up to 400 images per folder). Folding is remembered, a newly added folder opens with its inner folders folded, and `Space` steps only through what's on show. Added images come before the built-in wallpapers, and None is always at hand.

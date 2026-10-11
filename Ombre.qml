@@ -69,6 +69,7 @@ Item {
   property string agentThemeMessage: ""
   property string agentThemeAction: "status"
   property bool textShadow: false
+  property bool glass: false           // coloured cell backgrounds as frosted glass (Ghostty wallpaper windows)
   property var hiddenSources: []     // wallpaper paths hidden from the strips (files untouched)
   property bool showHidden: false
   property bool reshadowAll: false
@@ -365,10 +366,25 @@ Item {
     return "ok"
   }
 
+  // Glass is a Ghostty shader too: Claude's message band, Codex blocks and any
+  // other cell background become frosted, darkened glass over the wallpaper.
+  function setGlass(enabled) {
+    root.glass = enabled === true || enabled === "true"
+    root.saveConfig()
+    root.reshadowAll = true
+    root.scan()
+    return "ok"
+  }
+
+  // The shader token for a window's Ghostty config: dark, light or - for the
+  // text shadow, prefixed with glass when Glass is on (glass, glass-dark, glass-light).
   function shadowVariant(term) {
-    if (!root.textShadow) return "-"
-    var bg = (term && Palette.lookBackground(term.look, root.themeBackground)) || root.themeBackground
-    return Palette.isLight(bg) ? "light" : "dark"
+    var shadow = "-"
+    if (root.textShadow) {
+      var bg = (term && Palette.lookBackground(term.look, root.themeBackground)) || root.themeBackground
+      shadow = Palette.isLight(bg) ? "light" : "dark"
+    }
+    return root.glass ? (shadow === "-" ? "glass" : "glass-" + shadow) : shadow
   }
 
   // Omarchy dims every window a little (0.985 focused, 0.96 not), which lets the desktop
@@ -1332,11 +1348,11 @@ Item {
     var aw = Object.assign({}, root.awaiting)
     for (var f = 0; f < fresh.length; f++) delete aw[fresh[f].address]
     root.awaiting = aw
-    if (root.newDefault.mode === "none" && !root.textShadow) return
+    if (root.newDefault.mode === "none" && !root.textShadow && !root.glass) return
     for (var i = 0; i < fresh.length; i++) {
       var t = fresh[i]
       var index = root.indexOf(t.pty)
-      if (root.textShadow && t.wallpaperReady && !t.wallpaper) root.sendWallpaper(t, null)
+      if ((root.textShadow || root.glass) && t.wallpaperReady && !t.wallpaper) root.sendWallpaper(t, null)
       if (t.look || t.wallpaper) continue
       if (root.newDefault.mode === "none") continue
       if (root.newDefault.mode === "auto") {
@@ -1567,7 +1583,7 @@ Item {
     root.configDirty = false
     configWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$(dirname "$1")" && tmp=$(mktemp "$1.XXXXXX") && { printf "%s\\n" "$2" > "$tmp" && mv -f "$tmp" "$1"; }',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, strength: root.strength, blur: root.blur,
+        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, glass: root.glass, strength: root.strength, blur: root.blur,
         hiddenSources: root.hiddenSources,
         imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
@@ -1583,6 +1599,7 @@ Item {
       if (cfg && typeof cfg.pulse === "boolean") root.pulse = cfg.pulse
       if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
+      if (cfg && typeof cfg.glass === "boolean") root.glass = cfg.glass
       if (cfg && Array.isArray(cfg.hiddenSources)) root.hiddenSources = cfg.hiddenSources.filter(Palette.isImagePath)
       if (cfg && Array.isArray(cfg.imageSources)) root.imageSources = Palette.normalizeImageSources(cfg.imageSources)
       if (cfg && Array.isArray(cfg.collapsedFolders))
@@ -1697,8 +1714,9 @@ Item {
   //   write PTY SEQUENCE     escape sequence for the terminal (validated hex colors only)
   //   save PTY JSON          remember the look for the picker
   //   forget PTY
-  //   ghostty PID CONFDIR SHADOW COLORS STRENGTH BLUR PATH   per-window wallpaper and text shadow, then SIGUSR2
-  //     SHADOW is dark, light or -; STRENGTH BLUR PATH are "- 0 -" for no wallpaper
+  //   ghostty PID CONFDIR SHADOW COLORS STRENGTH BLUR PATH   per-window wallpaper and shaders, then SIGUSR2
+  //     SHADOW is dark, light or -, prefixed with glass when Glass is on (glass, glass-dark, glass-light);
+  //     STRENGTH BLUR PATH are "- 0 -" for no wallpaper. Glass needs a wallpaper to show through.
   readonly property string writerScript:
     'umask 077; d=$1; plug=$2; mkdir -p "$d/ghostty" 2>/dev/null\n'
     + 'if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then echo "ombre: $d is not a private directory owned by you" >&2; exit 1; fi\n'
@@ -1719,6 +1737,7 @@ Item {
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
     + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; rest=${rest#* }; blur=${rest%% *}; path=${rest#* }\n'
     + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
+    + '      glass=; case $shadow in glass) glass=1; shadow=- ;; glass-*) glass=1; shadow=${shadow#glass-} ;; esac\n'
     + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
     + '      if [ "$strength" != "-" ] && [ "$blur" != "0" ]; then\n'
     + '        if prepared=$(printf "%s\\n" "$path" | timeout 15 python3 -I "$plug/bin/ombre-blur" --amount "$blur"); then path=$prepared; else printf "wallpaper-error\\n"; continue; fi\n'
@@ -1726,10 +1745,16 @@ Item {
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
     + '        if [ "$colors" != "-" ]; then printf "%s\\n" "$colors" | tr ";" "\\n"; fi\n'
+    // Glass runs first: it reads the cell layers by alpha and hands an opaque frame on.
+    + '        if [ -n "$glass" ] && [ "$strength" != "-" ]; then\n'
+    + '          printf "custom-shader = \\"%s/shaders/glass.glsl\\"\\n" "$plug"\n'
+    + '          echo "background-opacity = 0.5"\n'
+    + '          echo "background-opacity-cells = true"\n'
+    + '        else glass=; fi\n'
     + '        case $shadow in dark|light)\n'
-    + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow"\n'
-    + '          echo "custom-shader-animation = false" ;;\n'
+    + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow" ;;\n'
     + '        esac\n'
+    + '        case $glass$shadow in 1*|dark|light) echo "custom-shader-animation = false" ;; esac\n'
     + '        if [ "$strength" != "-" ]; then\n'
     + '          printf "background-image = \\"%s\\"\\n" "$path"\n'
     + '          echo "background-image-fit = cover"\n'
@@ -1908,7 +1933,7 @@ Item {
         if (root.solid) solidLater.restart()
         // A window can take seconds to start its shell; keep looking until it
         // shows up in a scan.
-        if (root.newDefault.mode !== "none" || root.textShadow || root.solid || root.projects.length > 0) {
+        if (root.newDefault.mode !== "none" || root.textShadow || root.glass || root.solid || root.projects.length > 0) {
           var aw = Object.assign({}, root.awaiting)
           aw[data.split(",")[0]] = true
           root.awaiting = aw
@@ -2343,6 +2368,7 @@ Item {
           else if (k === Qt.Key_P) root.setPulse(!root.pulse)
           else if (k === Qt.Key_O) root.setSolid(!root.solid)
           else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
+          else if (k === Qt.Key_G) root.setGlass(!root.glass)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (k === Qt.Key_F && root.selectedTerm) root.saveProjectFrom(root.selectedTerm)
           else if (k === Qt.Key_A && root.tab === "wallpapers") root.openBrowser()
@@ -2424,6 +2450,12 @@ Item {
                 label: "Text shadow"
                 chosen: root.textShadow
                 onActivated: root.setTextShadow(!root.textShadow)
+              }
+              TextButton {
+                visible: root.catalog.launcher
+                label: "Glass"
+                chosen: root.glass
+                onActivated: root.setGlass(!root.glass)
               }
               TextButton {
                 visible: root.catalog.ghostty
