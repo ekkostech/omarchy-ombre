@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Full 16-colour palettes from one colour, made by Aether.
+
+usage: ombre-colour #rrggbb
+
+Prints {"base": "#rrggbb", "variants": [{"id", "name", "colors": [16 x "#rrggbb"]}]}.
+Aether's --palette-from-color makes the classic palette; --adjust-palette turns it
+vivid, soft, warm, cool or high-contrast. Variants Aether can't make are left out.
+"""
+import json
+import re
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+VARIANTS = [
+    ("vivid", "Vivid", ["--vibrance", "40"]),
+    ("soft", "Soft", ["--saturation", "-40"]),
+    ("warm", "Warm", ["--temperature", "30"]),
+    ("cool", "Cool", ["--temperature", "-30"]),
+    ("contrast", "Contrast", ["--contrast", "20"]),
+]
+
+
+def aether(args):
+    out = subprocess.run(["aether", *args, "--json"], capture_output=True, text=True,
+                         timeout=10, stdin=subprocess.DEVNULL)
+    if out.returncode != 0:
+        return None
+    try:
+        return json.loads(out.stdout)
+    except ValueError:
+        return None
+
+
+def palette(colors):
+    if not isinstance(colors, list) or len(colors) < 16:
+        return None
+    colors = [str(c).lower() for c in colors[:16]]
+    return colors if all(HEX.match(c) for c in colors) else None
+
+
+def variants(base):
+    first = aether(["--palette-from-color", base])
+    classic = palette(first.get("colors") if isinstance(first, dict) else None)
+    if not classic:
+        return []
+    found = [{"id": "", "name": "Classic", "colors": classic}]
+
+    def adjust(spec):
+        key, name, flags = spec
+        result = aether(["--adjust-palette", json.dumps(classic), *flags])
+        colors = palette(result.get("output") if isinstance(result, dict) else None)
+        return {"id": key, "name": name, "colors": colors} if colors else None
+
+    with ThreadPoolExecutor(max_workers=len(VARIANTS)) as pool:
+        found += [v for v in pool.map(adjust, VARIANTS) if v]
+    return found
+
+
+def main(argv):
+    if len(argv) != 2 or not HEX.match(argv[1]):
+        print("usage: ombre-colour #rrggbb", file=sys.stderr)
+        return 2
+    base = argv[1].lower()
+    try:
+        found = variants(base)
+    except (OSError, subprocess.TimeoutExpired):
+        found = []
+    print(json.dumps({"base": base, "variants": found}))
+    return 0 if found else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -11,6 +11,8 @@
 #   ombre mood:fire            an Aether mood from the current wallpaper
 #   ombre mood:ocean@/path/to/wallpaper.jpg
 #   ombre theme:tokyo-night    any installed Omarchy theme
+#   ombre colour '#e0603a' [vivid|soft|warm|cool|contrast]   a full Aether palette made from one colour
+#   ombre tone auto|dark|light moods follow the theme, or are always dark or light
 #   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15] [--blur 12]  Ghostty only
 #   ombre wallpaper none       remove the focused terminal's wallpaper
 #   ombre blur 12             blur the current wallpaper (0–40; 0 is off)
@@ -79,13 +81,13 @@ case ${1:-} in
     exit ;;
   --looks)
     omarchy-shell shell call "$id" looks "" |
-      jq -r '"saved:  " + ([.saved[].name] | join(", ")), "moods:  " + (.moods | join(" ")), "themes: " + (.themes | join(" ")), "wallpapers:", (.wallpapers[] | "  " + .)'
+      jq -r '"saved:  " + ([.saved[].name] | join(", ")), "moods:  " + (.moods | join(" ")), "colour: any #rrggbb, as classic vivid soft warm cool contrast", "themes: " + (.themes | join(" ")), "wallpapers:", (.wallpapers[] | "  " + .)'
     exit ;;
   --check)
     call looks "" # the first call refreshes what's installed
     sleep 0.5
     omarchy-shell shell call "$id" looks "" | jq -r '
-      (if .aether then "✓ Aether \(.aetherVersion | sub("^aether "; "")): moods are available"
+      (if .aether then "✓ Aether \(.aetherVersion | sub("^aether "; "")): moods and colour palettes are available"
        elif .aetherInstalled then "✗ \(.aetherVersion) is too old for moods. Update with: omarchy update"
        else "✗ Aether is not installed, and moods need it. Install with: omarchy pkg add aether" end),
       (if .ghostty then "✓ Ghostty is installed"
@@ -96,6 +98,13 @@ case ${1:-} in
     exit ;;
   --saved)
     omarchy-shell shell call "$id" looks "" | jq -r '.saved[] | "\(if .favorite then "★" else "☆" end) \(.name)"'; exit ;;
+  colour|color)
+    [[ ${2:-} =~ ^#[0-9a-fA-F]{6}$ ]] || usage 1
+    if [[ ${3:-} =~ ^(classic|vivid|soft|warm|cool|contrast)$ ]]; then set -- "colour:$2:$3" "${@:4}"
+    else set -- "colour:$2" "${@:3}"; fi ;;
+  tone)
+    case ${2:-} in auto|dark|light) call setMoodTone "$2" ;; *) usage 1 ;; esac
+    exit ;;
   blur)
     [[ ${2:-} =~ ^[0-9]+$ ]] && ((10#$2 <= 40)) || usage 1
     set -- "blur:$2" "${@:3}" ;;

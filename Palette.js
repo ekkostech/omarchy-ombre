@@ -211,6 +211,8 @@ function lookAccent(look) {
 }
 
 function pretty(id) {
+  var c = String(id || "").match(/^colour-([0-9a-f]{6})(?:-([a-z]+))?$/);
+  if (c) return (c[2] ? c[2].charAt(0).toUpperCase() + c[2].slice(1) + " " : "") + "#" + c[1];
   return String(id || "").split(/[-_]/).map(function (w) {
     return w ? w.charAt(0).toUpperCase() + w.slice(1) : w;
   }).join(" ");
@@ -225,7 +227,7 @@ function lookLabel(look) {
   if (!look) return "";
   if (look.kind === "layers") return textLabel(look) + " / " + backgroundLabel(look);
   if (look.kind === "tint") return hue(look.id) ? hue(look.id).name : look.id;
-  if (look.kind === "mood") return pretty(look.id) + " · " + basename(look.source);
+  if (look.kind === "mood") return pretty(look.id) + (look.source ? " · " + basename(look.source) : "");
   return pretty(look.id);
 }
 
@@ -711,6 +713,33 @@ function parseMoods(text, modes, source) {
     var p = byId[modes[j].id];
     if (p) out.push({ kind: "mood", id: modes[j].id, source: source, description: modes[j].description, palette: p });
   }
+  return out;
+}
+
+// `bin/ombre-colour` output: Aether palettes made from one colour. They are
+// moods without a wallpaper, id colour-rrggbb or colour-rrggbb-variant. The
+// accent is the ANSI slot Aether put the chosen colour in, in every variant.
+function colourLooks(text) {
+  var j;
+  try { j = JSON.parse(String(text || "")); } catch (e) { return []; }
+  if (!j || !isHex(j.base) || !Array.isArray(j.variants)) return [];
+  var base = j.base.toLowerCase(), slot = -1, out = [];
+  j.variants.forEach(function (v) {
+    var c = v && Array.isArray(v.colors) ? v.colors.slice(0, 16).map(function (x) { return String(x).toLowerCase(); }) : [];
+    if (c.length !== 16 || !c.every(isHex) || !(v.id === "" || /^[a-z]+$/.test(v.id))) return;
+    if (slot < 0) {
+      var b = rgb(base), best = Infinity;
+      for (var i = 1; i < 7; i++) {
+        var x = rgb(c[i]), d = (x[0] - b[0]) * (x[0] - b[0]) + (x[1] - b[1]) * (x[1] - b[1]) + (x[2] - b[2]) * (x[2] - b[2]);
+        if (d < best) { best = d; slot = i; }
+      }
+    }
+    var accent = c[slot];
+    out.push({ kind: "mood", id: "colour-" + base.slice(1) + (v.id ? "-" + v.id : ""), source: "",
+      description: (v.name || "Classic") + " palette Aether made from " + base,
+      palette: { background: mix(c[0], accent, MOOD_BACKGROUND), foreground: mix(c[7], accent, MOOD_FOREGROUND),
+        cursor: c[15], accent: accent, colors: c } });
+  });
   return out;
 }
 

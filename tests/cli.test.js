@@ -26,6 +26,10 @@ print(json.dumps({'saved':[{'name':'Deep Ocean','favorite':True}]}) if sys.argv[
   call=run(['saved','rename','Deep Ocean','Night Study']);assert.equal(call.args[3],'renameSaved');assert.deepEqual(JSON.parse(call.args[4]),{from:'Deep Ocean',to:'Night Study'});
   call=run(['blur','12','--all']);assert.deepEqual(JSON.parse(call.args[4]),{value:'blur:12',target:'all'});
   call=run(['wallpaper','/tmp/a.png','--blur','16']);assert.equal(JSON.parse(call.args[4]).blur,16);
+  call=run(['colour','#E0603A','vivid','--all']);assert.deepEqual(JSON.parse(call.args[4]),{value:'colour:#E0603A:vivid',target:'all'});
+  call=run(['colour','#3e63dd']);assert.deepEqual(JSON.parse(call.args[4]),{value:'colour:#3e63dd',target:'focused'});
+  call=run(['tone','light']);assert.deepEqual(call.args.slice(2),['ekkostech.ombre','setMoodTone','light']);
+  assert.notEqual(spawnSync(cli,['colour','teal'],{encoding:'utf8',env:{...process.env,PATH:dir+':'+process.env.PATH,OMBRE_TEST_CALLS:log}}).status,0);
   assert.match(run(['--saved']).out,/★ Deep Ocean/);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
