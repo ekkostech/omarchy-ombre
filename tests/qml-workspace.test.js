@@ -143,3 +143,55 @@ ShellRoot {
   assert.match(run(`if(picker.savedLooks.length!==1||picker.savedLooks[0].name!=="Deep Ocean"||!picker.savedLooks[0].favorite||picker.savedLooks[0].wallpaper.strength!==0.15)throw new Error("library reload failed");console.log("OMBRE_LIBRARY_RELOAD_PASS");Qt.quit();`),/OMBRE_LIBRARY_RELOAD_PASS/);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('a fresh catalog still makes palettes; tone and base colour persist', {skip:!available},()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ombre-colour-qt-test-'));
+ try {
+  fs.symlinkSync(repo,path.join(dir,'plugin'));
+  for(const n of ['Commons','Ui','services']) fs.symlinkSync(path.join(shell,'shell',n),path.join(dir,n));
+  fs.mkdirSync(path.join(dir,'omarchy'));
+  const config=path.join(dir,'omarchy/ombre.json');
+  fs.writeFileSync(config,JSON.stringify({welcomed:true}));
+  fs.writeFileSync(path.join(dir,'shell.qml'),`
+import QtQuick
+import Quickshell
+import "plugin" as Plugin
+ShellRoot {
+ function check(ok,message) { if(!ok) throw new Error(message) }
+ Plugin.Ombre {
+  id: picker
+  welcomed:true
+  property var made: []
+  property var moodsFor: []
+  function scan() {}
+  function reapply() {}
+  function loadCatalog() { catalogLoaded=true }
+  function ensureColours(base) { made=made.concat([base]) }
+  function ensureMoods(source) { moodsFor=moodsFor.concat([source]) }
+  function checkAgentThemes(action) {}
+ }
+ Timer { interval:300; running:true; onTriggered:{
+  picker.catalog=({wallpaper:"/w.png",aether:true,ghostty:false,launcher:false,modes:[{id:"fire",description:""}],wallpapers:[],themes:[],own:[],places:[]})
+  picker.catalogLoaded=true; picker.catalogAt=Date.now()
+  picker.refreshCatalog()
+  check(picker.made.length===1 && picker.made[0]===picker.baseColour,"fresh catalog made no palettes")
+  check(picker.moodsFor[0]==="/w.png","fresh catalog made no moods")
+  check(picker.setBaseColour("#E0603A")==="ok" && picker.baseColour==="#e0603a","base colour not normalised")
+  check(picker.setBaseColour("teal").indexOf("error")===0,"accepted a non-hex base colour")
+  check(picker.setMoodTone("light")==="ok" && picker.moodLight,"light tone ignored")
+  check(picker.setMoodTone("dim").indexOf("error")===0,"accepted an unknown tone")
+  check(picker.moodKey("/w.png")==="/w.png|light","tone missing from the mood cache key")
+  check(picker.validSpec("colour:#e0603a:vivid") && picker.validSpec("color:#3E63DD") && !picker.validSpec("colour:teal"),"colour spec validation")
+ } }
+ Timer { interval:900; running:true; onTriggered:{ console.log("OMBRE_COLOUR_QT_PASS"); Qt.quit() } }
+}
+`);
+  const result=quickshell.run(dir,{XDG_CONFIG_HOME:dir});
+  const output=result.stdout+result.stderr;
+  assert.equal(result.status,0,output);
+  assert.match(output,/OMBRE_COLOUR_QT_PASS/,output);
+  assert.doesNotMatch(output,/Error:|TypeError:|ReferenceError:|Binding loop/,output);
+  const stored=JSON.parse(fs.readFileSync(config));
+  assert.equal(stored.moodTone,'light'); assert.equal(stored.baseColour,'#e0603a');
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});

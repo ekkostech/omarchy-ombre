@@ -258,11 +258,16 @@ Item {
     root.checkAgentThemes("status")
     root.scan()
     root.scanImages()
-    // The catalog is cheap but forks a process per theme, so refresh it at most
-    // once a minute; a theme change refreshes it right away.
-    if (!root.catalogLoaded || Date.now() - root.catalogAt > 60000) root.loadCatalog()
-    else if (root.catalog.aether) root.ensureMoods(root.activeMoodSource)
+    root.refreshCatalog()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+  }
+
+  // The catalog is cheap but forks a process per theme, so refresh it at most
+  // once a minute; a theme change refreshes it right away. A fresh catalog still
+  // needs this wallpaper's moods and this colour's palettes made.
+  function refreshCatalog() {
+    if (!root.catalogLoaded || Date.now() - root.catalogAt > 60000) root.loadCatalog()
+    else if (root.catalog.aether) { root.ensureMoods(root.activeMoodSource); root.ensureColours(root.baseColour) }
   }
 
   function close() {
@@ -1552,12 +1557,14 @@ Item {
   function nextTab(delta) {
     var i = root.tabs.indexOf(root.tab)
     root.endPreview()
+    root.hoverText = ""
     root.tab = root.tabs[(i + delta + root.tabs.length) % root.tabs.length]
     root.tabChosen = true
   }
 
   function showSettings(section) {
     root.endPreview()
+    root.hoverText = ""
     root.browsing = false
     if (section) root.settingsSection = section
     root.view = "settings"
@@ -2725,7 +2732,7 @@ Item {
             spacing: Style.space(10)
             Image {
               anchors.verticalCenter: parent.verticalCenter
-              source: Qt.resolvedUrl("assets/promo/ombre-mark.svg")
+              source: Qt.resolvedUrl("assets/brand/ombre-mark.svg")
               width: Style.space(34)
               height: width
               sourceSize: Qt.size(width * 2, height * 2)
@@ -4694,7 +4701,7 @@ Item {
                     spacing: Style.space(16)
                     Image {
                       anchors.verticalCenter: parent.verticalCenter
-                      source: Qt.resolvedUrl("assets/promo/ombre-mark.svg")
+                      source: Qt.resolvedUrl("assets/brand/ombre-mark.svg")
                       width: Style.space(72)
                       height: width
                       sourceSize: Qt.size(width * 2, height * 2)

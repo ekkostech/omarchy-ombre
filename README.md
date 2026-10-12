@@ -1,61 +1,76 @@
+<p align="center">
+  <img src="media/intro.gif" alt="Ombre: every terminal, its own look. From ekkOStech." width="820">
+</p>
+
 # Ombre
 
-![Ombre — terminal colors and backgrounds](assets/promo/ombre-hero-v2.png)
+![Ombre 2.0: every terminal, its own look](media/banner.jpg)
 
 *Om-bray.* An ombre shades one colour into another; this shades each of your Omarchy terminals its own way.
 
-An [Omarchy](https://omarchy.org) shell plugin for telling terminal windows apart.
-Give each one its own look while whatever runs inside keeps running: a background
-tint, an [Aether](https://github.com/bjarneo/aether) mood made from a wallpaper,
-a whole Omarchy theme or, in Ghostty, its own wallpaper, plus a matching border.
-That's handy when a handful of coding agents are going at once.
+**Ombre** is an [Omarchy](https://omarchy.org) shell plugin from **ekkOStech** for telling terminal
+windows apart, which helps when a handful of coding agents are going at once. Give each terminal its
+own look while whatever runs inside keeps running: a tint, a full palette made from any colour, an
+[Aether](https://github.com/bjarneo/aether) mood made from a wallpaper, a whole Omarchy theme or, in
+Ghostty, its own wallpaper behind frosted glass. Its border matches, and pulses when its agent is done.
 
-> **Wallpapers require Ghostty.** Tints, moods and themes work in foot,
-> Alacritty, Kitty and Ghostty. A wallpaper behind the text is a Ghostty
-> feature, so that part needs Ghostty as your terminal
-> (`omarchy install terminal ghostty`) and a one-time setup from the picker.
-> The plugin says so in a notification the first time it loads.
+![Ombre 2.0 driving four real terminals: moods, themes, palettes from a colour, wallpapers, then a pulse when the agent finishes](media/demo.gif)
 
-![The actual Ombre 1.6 wallpaper controls with adjustable blur and reset](assets/screenshots/wallpaper-blur-1.6.png)
+▶ **[Watch the trailer](https://github.com/ekkostech/omarchy-ombre/releases/download/v2.0.0/ombre-trailer.mp4)**
 
-![The actual Ombre 1.5 picker with saved looks, favourites, terminal search, batch selection and undo controls](preview.png)
+> **Wallpapers require Ghostty.** Tints, palettes, moods and themes work in foot, Alacritty, Kitty
+> and Ghostty. A wallpaper behind the text is a Ghostty feature, so that part needs Ghostty
+> (`omarchy install terminal ghostty`) and a one-time setup from Ombre's Settings.
 
-*The real Ombre 1.5 picker, captured with four demo terminals and saved favourites. Search, select several cards, and reuse a complete look.*
+## New in 2.0
 
-![The Ombre 1.5 Moods tab with independent text and background controls and quick-access favourites](assets/screenshots/picker-moods-1.5.png)
+A redesigned picker. 1.x grew into one long column with its tabs two thirds of the way down; 2.0 has
+two columns and a home for settings.
 
-![Four agents, four looks: Tokyo Night with its wallpaper, an Aether mood over the Kanagawa wave, Gruvbox with its wallpaper, and a plain purple tint](preview.jpg)
+- **Terminals on the left**: each one with a live thumbnail in its own colours, its project folder,
+  workspace and look. Click one to style it, tick several to style them together.
+- **Styling on the right**: who you're styling, with Undo and Redo, then **Looks**, **Colours**,
+  **Moods**, **Themes** and **Wallpaper**. *Change: Everything / Text / Background* sits right beside them.
+- **Palettes from any colour**: type or pick a colour and Aether makes six full 16-colour palettes from
+  it: Classic, Vivid, Soft, Warm, Cool and Contrast.
+- **Mood tone**: Auto follows your theme; Dark or Light makes every mood dark or light regardless.
+- **Settings** (the gear, or `,`): window effects as switches with their keys, Claude + Codex app themes,
+  new terminals, project folders, and an About page that says what's installed.
 
-![Four agent terminals being given their own tints, a wallpaper and a theme, then one pulsing when its agent finishes](demo.gif)
+![The Ombre 2.0 picker: terminals on the left, the Colours tab with tints and six Aether palettes made from one colour](media/picker-colours.png)
 
-Press a key and a picker shows every terminal with a live preview. Hover a color,
-mood or theme to try it on the real window, click to keep it.
+![The Moods tab: 23 Aether styles made from a wallpaper, with Auto, Dark and Light tone](media/picker-moods.png)
+
+![The Themes tab: every installed Omarchy theme with its wallpaper](media/picker-themes.png)
+
+![The Wallpaper tab: strength, blur and frosted glass side by side, over the wallpaper grid](media/picker-wallpaper.png)
+
+![Settings: window effects as switches, each with its key](media/picker-settings.png)
 
 ## Features
 
-- **Adjustable wallpaper blur**: soften the image behind Ghostty text from Off to 40 in Wallpapers. Drag the slider and release to apply; Reset blur restores the original. Text stays sharp, originals stay untouched, and saved looks, batch styling and undo remember the amount.
-- **Saved looks and favourites**: save a named combination of text colours, background, wallpaper and strength. Star favourites for the quick-access strip; update, rename or remove them in Saved looks.
-- **Undo and redo per terminal**: restore a previous complete look with `Ctrl+Z`, redo with `Ctrl+Shift+Z` or `Ctrl+Y`. A palette plus wallpaper change is one step. Hover previews and automatic rules do not add history.
-- **Batch styling**: Ctrl-click cards or use their `+` buttons to select several terminals. Select visible cards or the current workspace, then apply colours, moods, themes, saved looks or wallpapers together.
-- **Terminal search**: search titles, project paths or workspaces with `Ctrl+F` or `/`, and filter to the workspace where you opened Ombre. Keyboard navigation follows matching cards.
-
-- **Live previews**: every terminal appears as a live thumbnail, on any workspace.
-- **See which window you're picking**: the desktop dims around the selected terminal and outlines it with its name, on whichever monitor it's on. A terminal on another workspace is marked as not on screen.
-- **Try before you pick**: hovering a swatch, mood or theme changes the actual window. Move away and it goes back.
-- **Aether moods**: Fire, Ocean, Forest, Neon, Sunset, Vaporwave, Midnight, Aurora and the rest of Aether's modes, generated from your current wallpaper or any wallpaper in Aether's library.
+- **Live previews**: every terminal appears as a live thumbnail, on any workspace, in its current colours.
+- **See which window you're styling**: the desktop dims around the selected terminal and outlines it with its name, on whichever monitor it's on. A terminal on another workspace is marked as off screen.
+- **Try before you pick**: hovering a swatch, palette, mood or theme changes the actual window. Move away and it goes back.
+- **Tints**: eight hues mixed into your theme's background, so text stays readable on light and dark themes. Keys `1`–`8`, `N` for the next, `0` for none.
+- **Palettes from any colour**: Aether's `--palette-from-color` and `--adjust-palette` turn one colour into six complete palettes.
+- **Aether moods**: Fire, Ocean, Forest, Neon, Sunset, Vaporwave, Midnight, Aurora and the rest of Aether's 23 modes, generated from your current wallpaper or any wallpaper in Aether's library, dark, light or following the theme.
 - **Themes per terminal**: give one terminal Tokyo Night and another Gruvbox. Every installed Omarchy theme is listed with its wallpaper, including themes Aether made.
-- **Wallpapers per terminal (Ghostty)**: put a different wallpaper behind each Ghostty window and change it while the window runs. A mood or theme can bring its wallpaper along, and the strength (Faint, Soft, Medium, Strong) keeps text readable on light and dark pictures.
-- **Images from anywhere**: in Wallpapers, **Add images or a folder…** (or `A`) opens a browser for any folder on the computer, including other drives. Click an image to use it, or add a whole folder. Added folders show as sections, with the folders inside them as their own sections; click a name to fold it, and the fold is remembered. Only real PNG and JPEG files are listed, the two formats Ghostty can show: Ombre checks each file's contents, so a WebP renamed to `.jpg` is left out. Nothing is copied or changed, and **Remove** only takes a folder back out of the picker.
+- **Wallpapers per terminal (Ghostty)**: a different wallpaper behind each Ghostty window, changed while it runs. A mood or theme can bring its wallpaper along; strength (Faint, Soft, Medium, Strong) keeps text readable and blur (Off to 40) softens the picture without touching the original.
+- **Glass (Ghostty)**: blocks an app paints with its own background, such as Claude Code's message band, Codex's panels, a selection or a status bar, become frosted glass over the terminal's wallpaper, with the text kept sharp. Pick its colour (Auto follows each look), tint and blur.
+- **Images from anywhere**: add any folder or image on the computer, including other drives. Folders show as foldable sections. Only real PNG and JPEG files are listed, checked by their contents. Nothing is copied or changed.
+- **Saved looks and favourites**: save a named combination of text colours, background, wallpaper, strength and blur; star favourites; update, rename or remove them.
+- **Undo and redo per terminal**: `Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`. A palette plus wallpaper change is one step; hover previews and automatic rules stay out of history.
+- **Batch styling**: tick several terminals (or `Ctrl+A` for all that match the search), then apply anything to all of them.
+- **Terminal search**: titles, project paths or workspaces, with `/` or `Ctrl+F`, and a This-workspace filter.
 - **Nothing restarts**: looks are escape sequences sent to the window's pty, so agents, editors and shells keep running.
-- **Matching borders**: the Hyprland border takes the look's accent color, bright on the focused window and dark on the others so you can still see focus move (press `B` to turn it off).
-- **Solid Ghostty windows**: Omarchy makes every window slightly see-through (a little more when it isn't focused), which lets the desktop wallpaper show through a terminal's own wallpaper. Ombre makes Ghostty windows fully opaque, on by default. Press `O` or click "Solid Ghostty" to give Omarchy's transparency back; each window returns to exactly the opacity it had.
-- **Text shadow (Ghostty)**: a soft drop shadow under the text so it reads cleanly over any wallpaper. A tiny GPU shader that only runs when the terminal redraws. Press `T` to toggle.
-- **Glass (Ghostty)**: blocks an app paints with its own background, such as Claude Code's message band, Codex's panels, a selection or a status bar, become frosted glass: the terminal's own wallpaper shows through, blurred and darkened, with the text on top kept sharp. Dark blocks become dark glass and coloured ones keep their tint. Pick the glass **colour** in Wallpapers: **Auto** follows each terminal's own look (a red terminal gets red smoked glass), or choose Smoke, a deep hue or any `#rrggbb`. **Tint** sets how much the colour covers the wallpaper and **Blur** how soft it is. A GPU shader that only runs when the terminal redraws, and only in Ghostty windows with a wallpaper. Press `G` or click **Glass**.
-- **Project folders**: a terminal working inside a project's folder gets that project's look and wallpaper automatically, so Claude Code or Codex launched from `~/Projects/acme` comes up dressed for Acme. Style one terminal, press `F`, done. Your own wallpapers in `~/Wallpapers/Ombre/` show up in the Wallpapers tab.
-- **A default for new terminals**: new terminals can open with a saved look (and wallpaper), or each get a different tint automatically so new agents never look alike. Set it in the picker's New terminals tab.
-- **Pulses when an agent is done**: when an agent finishes and waits for you, its terminal's border breathes in its own color until you click into it. Works with agents that show a spinner in the window title (like Claude Code) and with any program that rings the terminal bell. Press `P` to turn it off.
-- **Fits every theme**: tints are your theme's background with a little of the hue mixed in, so text stays readable on light and dark themes. Switching themes re-derives them.
-- **Scriptable**: `ombre red --title api` from a shell, a keybinding or an agent.
+- **Matching borders**: the Hyprland border takes the look's accent, bright on the focused window and dark on the others.
+- **Pulses when an agent is done**: when an agent finishes and waits for you, its border breathes in its own colour until you click into it. Works with agents that show a spinner in the window title (like Claude Code) and with any program that rings the bell.
+- **Solid Ghostty windows** and **text shadow (Ghostty)**: so a terminal's own wallpaper isn't mixed with the desktop's, and text reads cleanly over any picture.
+- **Claude + Codex follow along**: link once and their interface draws in each terminal's own palette.
+- **Project folders**: a terminal working inside a project's folder gets that project's look automatically. Style one, press `F`, done.
+- **A default for new terminals**: a saved look, or a different tint each so new agents never look alike.
+- **Scriptable**: `ombre colour '#e0603a' vivid --title api` from a shell, a keybinding or an agent.
 
 ## Requirements
 
@@ -94,51 +109,55 @@ o.bind("SUPER + ALT + T", "Ombre", "omarchy-shell shell toggle ekkostech.ombre '
 
 ## Using the picker
 
+The picker has two columns. On the left are your terminals; the one you were in is selected when it
+opens. On the right is what to give them: the chips at the top show who you're styling, then the tabs.
+
+- **Looks**: your saved looks and favourites.
+- **Colours**: the eight tints, six Aether palettes from any colour you type or pick, and exact text and background colours.
+- **Moods**: Aether's styles made from a wallpaper (the strip picks which), dark, light or following your theme.
+- **Themes**: every installed Omarchy theme, with its wallpaper.
+- **Wallpaper** (Ghostty): strength, blur and glass, then None, your added folders and the built-in wallpapers.
+
+*Change: Everything / Text / Background* decides which layer a palette, mood, theme or saved look
+changes. On a Ghostty window, **Bring its wallpaper** makes a mood or theme bring its picture along.
+
+Window effects, Claude + Codex app themes, what new terminals get, project folders and the About page
+are in **Settings**: the gear at the top right, or `,`.
+
 | Key | Action |
 |-----|--------|
-| Click a card | Select that terminal (arrow keys do the same) |
-| Hover a swatch, mood or theme | Preview it on the terminal, without changing the selection |
-| Click it | Keep it |
+| `↑` / `↓` (`k` / `j`) | Move between terminals |
+| `←` / `→`, `Tab` / `Shift+Tab` | Switch tabs |
+| Click a terminal | Style just that one |
+| Tick box, `Ctrl+click` or `Ctrl+Space` | Add or remove a terminal from the ones being styled |
+| `Ctrl+A` | Tick every terminal that matches the search |
+| Hover a swatch, palette, mood, theme or wallpaper | Preview it on the selected terminal |
+| Click it | Keep it, on every terminal being styled |
+| `Space` / `Shift+Space` | Next / previous look on the open tab |
 | `1`–`8` | Tint: red, orange, amber, green, teal, blue, purple, pink |
-| `0` / `Backspace` | Back to the terminal's own colors |
 | `N` | Next tint |
-| `Space` / `Shift+Space` | Next / previous mood, theme or wallpaper |
-| `Ctrl+F` / `/` | Focus terminal search |
-| `Ctrl+click` / card `+` | Add or remove a terminal from the batch selection |
-| `Ctrl+Space` | Toggle the active card in the batch selection |
-| `Ctrl+A` | Select all visible matching terminals |
-| `Ctrl+S` | Open Saved looks and name the active terminal’s look |
-| `Ctrl+Z` | Undo the active terminal’s last change |
-| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo the active terminal’s last change |
-| `Tab` | Switch between Saved looks, Moods, Themes, Wallpapers and Projects & new terminals |
-| `W` / `Shift+W` | Next / previous wallpaper to make moods from |
-| `A` | Wallpapers tab: add images or a folder from anywhere. In the browser: `↑`/`↓` move, `Enter` opens, `Backspace` goes up, `A` adds the folder, `/` types a path, `Esc` closes |
-| `X` | Hide that wallpaper from the strips (right-click does too; files are untouched) |
-| `H` | Show / hide the hidden ones |
-| Arrows / `hjkl` | Move between terminals |
-| `D` | Save the selected terminal's look as the default for new terminals |
+| `0` / `Backspace` | Back to the terminal's own colours (on Wallpaper: no wallpaper) |
+| `/` or `Ctrl+F` | Search terminals |
+| `Ctrl+S` | Name and save the selected terminal's look |
+| `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo / redo the selected terminal |
+| `W` / `Shift+W` | Moods: next / previous wallpaper to make moods from |
+| `X` | Moods: hide that wallpaper from the strip (right-click does too; files are untouched) |
+| `H` | Moods and Wallpaper: show or hide the hidden ones |
+| `A` | Wallpaper: add images or a folder from anywhere. In the browser: `↑`/`↓` move, `Enter` opens, `Backspace` goes up, `A` adds the folder, `/` types a path, `Esc` closes |
+| `D` | Use the selected terminal's look for new terminals |
 | `F` | Use the selected terminal's look for its project folder |
-| `T` | Text shadow on/off (Ghostty) |
-| `G` | Glass on/off: frosted glass behind coloured blocks (Ghostty windows with a wallpaper) |
-| `O` | Solid Ghostty windows on/off |
-| `B` | Borders on/off |
-| `P` | Pulse when an agent is done, on/off |
+| `B` `P` `O` `T` `G` | Borders, pulse, solid Ghostty, text shadow, glass on/off |
+| `,` | Settings (`Esc` goes back) |
 | `Esc` / `Enter` | Close |
 
-The terminal you were in is selected when the picker opens. Everything works
-from the keyboard alone; the mouse is optional. The tint dots sit on each
-terminal's card and act on that card's terminal; moods, themes and wallpapers
-apply to the selected targets. On a Ghostty window, **with its wallpaper** (next to the tabs) makes a
-mood or theme bring its wallpaper along.
-
-Moods need Aether 4 or newer. Without it, the Moods tab says how to get it, and
-tints, themes and wallpapers still work.
+Everything works from the keyboard alone; the mouse is optional. Moods and palettes need Aether 4 or
+newer. Without it, those tabs say how to get it, and tints, themes and wallpapers still work.
 
 ## Saved looks, history and selection
 
-Save the **active** card’s exact combination in Saved looks. Names are case-insensitive and can contain spaces (up to 64 characters). Star a saved look to put it in the favourites strip. **Update** replaces it with the active card’s current combination; **Rename** preserves the look. Deleting requires a second confirmation click. Saved looks apply the chosen layer scope; a complete preset also restores its saved wallpaper and strength, including no wallpaper.
+Save the selected terminal’s exact combination in Looks. Names are case-insensitive and can contain spaces (up to 64 characters). Star a saved look to put it in the favourites strip. **Update** replaces it with the selected terminal’s current combination; **Rename** preserves the look. Deleting requires a second confirmation click. Saved looks apply the chosen layer scope; a complete preset also restores its saved wallpaper and strength, including no wallpaper.
 
-A plain card click returns to single-terminal styling. Ctrl-click or the card’s `+` button builds a batch selection. **Select visible** uses the current search and workspace filter; **Select workspace** selects matching cards on the workspace where the picker opened. Changing a filter clears the batch selection. Hidden cards are never batch targets. Hover previews and undo/redo affect only the active card. When a mixed batch contains terminals without wallpaper support, their colours still apply and Ombre reports how many wallpaper changes were skipped.
+A plain click on a terminal returns to styling just that one. Tick boxes, Ctrl-click or `Ctrl+Space` build a batch; **Tick all** (`Ctrl+A`) ticks every terminal that matches the search and workspace filter. Changing a filter clears the ticks, and hidden terminals are never batch targets. Hover previews and undo/redo affect only the selected terminal. When a mixed batch contains terminals without wallpaper support, their colours still apply and Ombre reports how many wallpaper changes were skipped.
 
 Undo history keeps up to 50 changes per terminal for the current shell session. Closing a terminal or restarting the shell clears its history; a reused process or pty never inherits it. Saved looks and favourites survive shell restarts in `~/.config/omarchy/ombre.json`, alongside existing settings and project rules. The library holds up to 200 named looks. Wallpapers are referenced by their local file paths.
 
@@ -173,6 +192,10 @@ ombre reset --all          # clear everything
 ombre mood:fire --title docs
 ombre mood:ocean@/path/to/wallpaper.jpg
 ombre theme:tokyo-night --pid 1234
+ombre colour '#e0603a'      # a full Aether palette made from one colour
+ombre colour '#e0603a' warm --title api   # or vivid, soft, cool, contrast
+ombre tone light           # moods always light (or dark, or auto to follow the theme)
+ombre blur 16              # blur the focused terminal's wallpaper (0-40; 0 is off)
 ombre wallpaper ~/Wallpapers/forest.jpg --strength 0.15  # Ghostty
 ombre wallpaper none
 ombre --looks              # list moods, themes and wallpapers
@@ -202,7 +225,8 @@ Under the hood these call
 `omarchy-shell shell call ekkostech.ombre apply '{"value":"red","target":"title:api"}'`.
 The targets are `focused`, `title:TEXT`, `pid:N`, `address:HEX` and `all`. The
 values are a hue name, `#rrggbb`, `next`, `reset`, `mood:NAME[@WALLPAPER]`,
-`theme:NAME`, `wallpaper:/path/to/image.jpg` or `wallpaper:none`.
+`colour:#rrggbb[:classic|vivid|soft|warm|cool|contrast]`, `theme:NAME`,
+`wallpaper:/path/to/image.jpg` or `wallpaper:none`.
 
 ## How it works
 
@@ -217,7 +241,9 @@ that changes its colors:
 
 Tints mix a hue into your theme's background, and they're re-mixed when you
 switch themes. Moods come from `aether --extract-palette WALLPAPER
---extract-mode MODE`. Themes map `colors.toml` onto the 16 colors the same way
+--extract-mode MODE` (with `--light-mode` for light ones). Palettes from a colour
+come from `aether --palette-from-color HEX`, and their variants from
+`aether --adjust-palette` (`bin/ombre-colour`). Themes map `colors.toml` onto the 16 colors the same way
 Omarchy's foot template does.
 
 Wallpapers use Ghostty's `background-image` option. Out of the box, Omarchy runs
@@ -260,7 +286,7 @@ clean. The border setting is saved in `~/.config/omarchy/ombre.json`.
 ## Development
 
 ```bash
-node --test tests/*.test.js # unit tests for the colour and parsing logic
+node --test tests/          # unit tests, plus Qt-backed tests where a Wayland session is running
 omarchy plugin validate .   # manifest check
 ```
 
@@ -276,14 +302,4 @@ omarchy plugin remove ekkostech.ombre
 
 ## License
 
-MIT
-
-### Wallpaper blur from the command line
-
-```sh
-ombre blur 16             # Blur the active terminal’s existing wallpaper
-ombre blur 0 --all        # Restore original images on all wallpaper terminals
-ombre wallpaper /absolute/path/image.png --blur 20
-```
-
-Blur ranges from 0 (Off) to 40. Existing wallpapers start with blur off.
+MIT · Made by **ekkOStech**

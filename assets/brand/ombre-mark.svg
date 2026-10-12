@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Ombre</title>
+  <!-- Ombre 2.0 mark, "Shaded Prompt" by ekkOStech.
+       The 1.x prompt (>_) sliced into six stacked panes; one ombre (ember, magenta, violet, ocean)
+       flows down through them so every pane carries its own shade. Transparent background. -->
+  <defs>
+    <linearGradient id="ombre-flow" x1="0" y1="66" x2="0" y2="446" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF7A3D"/>
+      <stop offset=".3" stop-color="#EC3A7C"/>
+      <stop offset=".62" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#1FB2E6"/>
+    </linearGradient>
+    <mask id="ombre-panes" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <g fill="#fff">
+        <rect x="0" y="66" width="512" height="50"/>
+        <rect x="0" y="130" width="512" height="50"/>
+        <rect x="0" y="194" width="512" height="50"/>
+        <rect x="0" y="258" width="512" height="60"/>
+        <rect x="0" y="332" width="512" height="50"/>
+        <rect x="0" y="396" width="512" height="50"/>
+      </g>
+    </mask>
+  </defs>
+  <path d="M110 106 L272 256 L110 406" fill="none" stroke="url(#ombre-flow)" stroke-width="84"
+        stroke-linejoin="round" stroke-linecap="round" mask="url(#ombre-panes)"/>
+  <rect x="314" y="396" width="128" height="50" rx="12" fill="#1FB2E6"/>
+</svg>
