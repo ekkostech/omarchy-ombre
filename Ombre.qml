@@ -2407,6 +2407,13 @@ Item {
         text = colorField.value
       }
       Keys.onEscapePressed: { text = colorField.value; keyCatcher.forceActiveFocus() }
+      // No paste: Qt reads the whole clipboard offer before maximumLength and the
+      // validator apply, so a huge or endless clipboard could stall the shell.
+      // A colour is seven characters; type it.
+      Keys.onPressed: function (event) {
+        if (event.matches(StandardKey.Paste) || (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier)))
+          event.accepted = true
+      }
     }
   }
 
