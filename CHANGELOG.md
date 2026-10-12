@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.0 — 2026-10-12
+A new picker. 1.x grew one long column: switches, search, selection buttons, cards, colour fields, app linking and favourites all came before the tabs, so the tabs sat two thirds of the way down. 2.0 is laid out in two columns.
+- **Terminals on the left**: every terminal as a row with its live thumbnail in its own colours, its project folder, workspace and current look. Click one to style it, tick several to style them together, and a dot shows an agent that finished. `↑`/`↓` move through them.
+- **Styling on the right**: who you're styling (as chips) with Undo and Redo, then five tabs: **Looks**, **Colours**, **Moods**, **Themes** and **Wallpaper**. **Change: Everything / Text / Background** sits beside the tabs it affects. `←`/`→` or `Tab` switch tabs.
+- **Colours** is new: the eight tints (no longer repeated on every card), full palettes from any colour, and exact text and background colours.
+- **Wallpaper** keeps the image's strength and blur and the glass colour, tint and blur side by side.
+- **Settings** (the gear, or `,`) holds what isn't per-terminal: window effects (borders, pulse, solid Ghostty, text shadow, glass) as switches with their keys, Claude + Codex app themes, what new terminals get, project folders, and About, which says what's installed.
+- **More from Aether**:
+  - **From any colour**: type or pick a colour and Aether makes six full 16-colour palettes from it, Classic, Vivid, Soft, Warm, Cool and Contrast (`aether --palette-from-color`, then `--adjust-palette`). From a shell: `ombre colour '#e0603a' vivid`, or the look value `colour:#e0603a:vivid`.
+  - **Mood tone**: Auto follows the theme as before; Dark or Light makes every mood dark or light whatever the theme. `ombre tone auto|dark|light`.
+- New logo, and the picker's header carries the version.
+
 ## 1.9.0 — 2026-10-11
 - Glass colour: **Auto** (each terminal's glass takes its own look's colour), Smoke, deep versions of the eight hues, or any `#rrggbb`. **Tint** (how much the colour covers the wallpaper) and **Blur** (how soft it is) have sliders, with Reset glass. All in Wallpapers, and `ombre glass color|tint|blur|reset` from a shell.
 - Ghostty shaders take no settings, so `bin/ombre-glass` writes each window its own copy of the glass shader, privately next to its config. The name carries a hash of the contents, so Ghostty recompiles exactly when something changes; a window's old copy is removed. If the copy can't be written, the window gets no glass rather than a half see-through background.

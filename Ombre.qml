@@ -99,6 +99,19 @@ Item {
   property bool catalogLoaded: false
   property real catalogAt: 0
   property string tab: "moods"
+  // The picker shows either styling (terminals + tabs) or its settings.
+  property string view: "style"
+  property string settingsSection: "windows"
+  // Moods follow the theme (auto) or are always made dark or light.
+  property string moodTone: "auto"
+  readonly property bool moodLight: moodTone === "light" || (moodTone === "auto" && lightTheme)
+  // Palettes Aether makes from one colour (bin/ombre-colour), per base colour.
+  property string baseColour: "#3e63dd"
+  property var colourCache: ({})
+  property var colourQueue: []
+  property string colourRunning: ""
+  property string colourMessage: ""
+  readonly property var colourLooks: colourCache[baseColour] || []
   property string moodSource: ""
   property var moodCache: ({})
   property var moodQueue: []
@@ -142,16 +155,15 @@ Item {
   readonly property bool lightTheme: Palette.isLight(themeBackground)
   readonly property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
   readonly property int pad: Style.spacing.panelPadding
-  readonly property int gap: Style.space(12)
   readonly property int swatchSize: Style.space(18)
-  readonly property int cardWidth: Style.space(264)
-  readonly property int columns: Math.max(1, Math.min(filteredTerminals.length, 4))
-  readonly property int layoutColumns: Math.max(1, Math.min(terminals.length, 4))
-  readonly property int contentWidth: Math.max(layoutColumns * cardWidth + (layoutColumns - 1) * gap, Style.space(820))
 
   readonly property var selectedTerm: current >= 0 && current < terminals.length ? terminals[current] : null
   readonly property bool selectedTakesWallpaper: selectedTerm !== null && selectedTerm.wallpaperReady
-  readonly property var tabs: ["saved", "moods", "themes", "wallpapers", "default"]
+  readonly property var tabs: ["saved", "colours", "moods", "themes", "wallpapers"]
+  readonly property var tabNames: ({ saved: "Looks", colours: "Colours", moods: "Moods", themes: "Themes", wallpapers: "Wallpaper" })
+  readonly property var settingsSections: [
+    { id: "windows", name: "Window effects" }, { id: "agents", name: "Claude + Codex" },
+    { id: "new", name: "New terminals" }, { id: "projects", name: "Project folders" }, { id: "about", name: "About" }]
 
   // What a newly opened terminal gets: none, auto (the least-used tint), or a
   // saved look with an optional wallpaper. Terminals already open when the
@@ -237,6 +249,7 @@ Item {
   function open(payloadJson) {
     root.openingWorkspace = Hyprland.focusedWorkspace ? String(Hyprland.focusedWorkspace.name || Hyprland.focusedWorkspace.id) : ""
     root.markedKeys = []
+    root.view = "style"
     root.opened = true
     root.focusOnScan = true
     root.hoverText = ""
@@ -245,11 +258,16 @@ Item {
     root.checkAgentThemes("status")
     root.scan()
     root.scanImages()
-    // The catalog is cheap but forks a process per theme, so refresh it at most
-    // once a minute; a theme change refreshes it right away.
-    if (!root.catalogLoaded || Date.now() - root.catalogAt > 60000) root.loadCatalog()
-    else if (root.catalog.aether) root.ensureMoods(root.activeMoodSource)
+    root.refreshCatalog()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+  }
+
+  // The catalog is cheap but forks a process per theme, so refresh it at most
+  // once a minute; a theme change refreshes it right away. A fresh catalog still
+  // needs this wallpaper's moods and this colour's palettes made.
+  function refreshCatalog() {
+    if (!root.catalogLoaded || Date.now() - root.catalogAt > 60000) root.loadCatalog()
+    else if (root.catalog.aether) { root.ensureMoods(root.activeMoodSource); root.ensureColours(root.baseColour) }
   }
 
   function close() {
@@ -489,6 +507,7 @@ Item {
     return v === "undo" || v === "redo" || ((v.indexOf("saved:") === 0 || v.indexOf("save:") === 0) && Workspace.name(v.slice(v.indexOf(":") + 1)) !== "")
       || v === "next" || v === "reset" || Palette.tintLook(v) !== null || /^text:#[0-9a-fA-F]{6}$/.test(v)
       || /^mood:[a-z0-9-]+(@\/.+)?$/.test(v) || /^theme:[A-Za-z0-9._-]+$/.test(v)
+      || /^colou?r:#[0-9a-fA-F]{6}(:[a-z]+)?$/.test(v)
       || v === "wallpaper:none" || (v.indexOf("wallpaper:") === 0 && Palette.isImagePath(v.slice(10)))
       || (/^blur:[0-9]+$/.test(v) && Number(v.slice(5)) <= 40)
       || v === "pulse:now" || v === "pulse:stop"
@@ -517,6 +536,16 @@ Item {
       if (!list) { root.ensureMoods(source); return { wait: true } }
       for (var i = 0; i < list.length; i++) if (list[i].id === m[1]) return { look: list[i] }
       return { error: "no mood " + m[1] }
+    }
+
+    var cm = spec.match(/^colou?r:(#[0-9a-fA-F]{6})(?::([a-z]+))?$/)
+    if (cm) {
+      if (!root.catalog.aether) return { error: "Aether is not installed" }
+      var base = cm[1].toLowerCase(), made = root.colourCache[base]
+      if (!made) { root.ensureColours(base); return { wait: true } }
+      var want = "colour-" + base.slice(1) + (cm[2] && cm[2] !== "classic" ? "-" + cm[2] : "")
+      for (var ci = 0; ci < made.length; ci++) if (made[ci].id === want) return { look: made[ci] }
+      return { error: "no " + (cm[2] || "classic") + " palette from " + base }
     }
 
     var t = spec.match(/^theme:([A-Za-z0-9._-]+)$/)
@@ -867,14 +896,63 @@ Item {
     root.catalogLoaded = true
     root.catalogAt = Date.now()
     if (root.moodSource && root.moodSources.indexOf(root.moodSource) < 0) root.moodSource = ""
-    if (!root.tabChosen && !c.aether && root.tab === "moods") root.tab = "themes"
-    if (root.opened && c.aether) root.ensureMoods(root.activeMoodSource)
+    if (!root.tabChosen && !c.aether && root.tab === "moods") root.tab = "colours"
+    if (root.opened && c.aether) { root.ensureMoods(root.activeMoodSource); root.ensureColours(root.baseColour) }
     if (root.requests.length > 0) root.scan()
     root.maybeWelcome()
   }
 
   function moodKey(source) {
-    return source + (root.lightTheme ? "|light" : "|dark")
+    return source + (root.moodLight ? "|light" : "|dark")
+  }
+
+  function setMoodTone(tone) {
+    if (tone !== "auto" && tone !== "dark" && tone !== "light") return "error: tone is auto, dark or light"
+    root.endPreview()
+    root.moodTone = tone
+    root.saveConfig()
+    if (root.catalog.aether) root.ensureMoods(root.activeMoodSource)
+    return "ok"
+  }
+
+  // Aether palettes from one colour: classic, vivid, soft, warm, cool, contrast.
+  function setBaseColour(value) {
+    if (!Palette.isHex(value)) return "error: colour is #rrggbb"
+    root.endPreview()
+    root.baseColour = String(value).toLowerCase()
+    root.saveConfig()
+    root.ensureColours(root.baseColour)
+    return "ok"
+  }
+
+  function ensureColours(base) {
+    base = String(base || "").toLowerCase()
+    if (!Palette.isHex(base) || !root.catalog.aether || root.colourCache[base]) return
+    if (root.colourRunning === base || root.colourQueue.indexOf(base) >= 0) return
+    root.colourQueue = root.colourQueue.concat([base])
+    root.nextColours()
+  }
+
+  function nextColours() {
+    if (colourProc.running || root.colourQueue.length === 0) return
+    var base = root.colourQueue[0]
+    root.colourQueue = root.colourQueue.slice(1)
+    root.colourRunning = base
+    root.colourMessage = ""
+    colourProc.command = ["python3", "-I", root.pluginDir + "/bin/ombre-colour", base]
+    colourProc.running = true
+  }
+
+  function onColours(output) {
+    var base = root.colourRunning, made = Palette.colourLooks(output)
+    if (made.length) {
+      var cache = Object.assign({}, root.colourCache)
+      cache[base] = made
+      root.colourCache = cache
+    } else root.colourMessage = "Aether could not make a palette from " + base + "."
+    root.colourRunning = ""
+    root.nextColours()
+    if (root.requests.length > 0) root.scan()
   }
 
   function ensureMoods(source) {
@@ -891,7 +969,7 @@ Item {
     root.moodRunning = source
     var modes = root.catalog.modes.map(function (m) { return m.id })
       .filter(function (id) { return /^[a-z0-9-]+$/.test(id) })
-    moodProc.command = ["sh", "-c", root.moodScript, "sh", source, root.lightTheme ? "--light-mode" : ""].concat(modes)
+    moodProc.command = ["sh", "-c", root.moodScript, "sh", source, root.moodLight ? "--light-mode" : ""].concat(modes)
     moodProc.running = true
   }
 
@@ -1461,7 +1539,7 @@ Item {
       root.hoverText = Palette.basename(choices[wn])
       return
     }
-    var list = root.tab === "moods" ? root.moods : root.catalog.themes
+    var list = root.tab === "moods" ? root.moods : root.tab === "colours" ? root.colourLooks : root.catalog.themes
     if (list.length === 0) return
     var i = -1
     for (var k = 0; k < list.length; k++) if (Palette.sameLook(list[k], root.scopeLook(term.look))) i = k
@@ -1478,8 +1556,24 @@ Item {
 
   function nextTab(delta) {
     var i = root.tabs.indexOf(root.tab)
+    root.endPreview()
+    root.hoverText = ""
     root.tab = root.tabs[(i + delta + root.tabs.length) % root.tabs.length]
     root.tabChosen = true
+  }
+
+  function showSettings(section) {
+    root.endPreview()
+    root.hoverText = ""
+    root.browsing = false
+    if (section) root.settingsSection = section
+    root.view = "settings"
+  }
+
+  function nextSection(delta) {
+    var ids = root.settingsSections.map(function (s) { return s.id })
+    var i = ids.indexOf(root.settingsSection)
+    root.settingsSection = ids[(i + delta + ids.length) % ids.length]
   }
 
   function runSetup() {
@@ -1615,6 +1709,7 @@ Item {
         hiddenSources: root.hiddenSources,
         imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
+        moodTone: root.moodTone, baseColour: root.baseColour,
         projects: root.projects, savedLooks: root.savedLooks
       })]
     configWriter.running = true
@@ -1641,6 +1736,8 @@ Item {
       if (cfg && typeof cfg.strength === "number") root.strength = Palette.normalizeWallpaper({ path: "/x.png", strength: cfg.strength }).strength
       if (cfg && typeof cfg.blur === "number") root.blur = Palette.normalizeBlur(cfg.blur)
       if (cfg && typeof cfg.withWallpaper === "boolean") root.withWallpaper = cfg.withWallpaper
+      if (cfg && (cfg.moodTone === "auto" || cfg.moodTone === "dark" || cfg.moodTone === "light")) root.moodTone = cfg.moodTone
+      if (cfg && Palette.isHex(cfg.baseColour)) root.baseColour = String(cfg.baseColour).toLowerCase()
       if (cfg && cfg.welcomed === true) root.welcomed = true
       if (cfg && Array.isArray(cfg.savedLooks)) root.savedLooks = Workspace.library(cfg.savedLooks)
       if (cfg && Array.isArray(cfg.projects)) {
@@ -1860,6 +1957,11 @@ Item {
   }
 
   Process {
+    id: colourProc
+    stdout: StdioCollector { onStreamFinished: root.onColours(text) }
+  }
+
+  Process {
     id: setupProc
     stdout: StdioCollector { id: setupOut }
     stderr: StdioCollector { id: setupErr }
@@ -1996,19 +2098,25 @@ Item {
   }
 
   // ---- UI ---------------------------------------------------------------
+  // A tint for the terminals being styled; "" is none. Hovering tries it on the
+  // selected terminal, a click keeps it on every target.
   component Swatch: Item {
     id: swatch
     property string value: ""
-    property bool chosen: false
-    property int termIndex: -1
+    readonly property var background: root.selectedTerm ? Palette.backgroundLook(root.selectedTerm.look) : null
+    readonly property bool chosen: root.selectedTerm !== null
+      && (value ? background !== null && background.kind === "tint" && background.id === value : background === null)
     readonly property bool hot: hover.containsMouse
 
-    width: root.swatchSize
-    height: root.swatchSize
+    width: Style.space(26)
+    height: width
+    Accessible.role: Accessible.Button
+    Accessible.name: value ? Palette.hue(value).name + " tint" : "No tint"
+    Accessible.onPressAction: root.applyTintTargets(swatch.value)
 
     Rectangle {
       anchors.centerIn: parent
-      width: parent.width + Style.space(6)
+      width: parent.width + Style.space(7)
       height: width
       radius: width / 2
       color: "transparent"
@@ -2022,7 +2130,7 @@ Item {
       width: parent.width
       height: width
       radius: width / 2
-      scale: swatch.hot ? 1.18 : 1.0
+      scale: swatch.hot ? 1.14 : 1.0
       color: swatch.value ? Palette.hue(swatch.value).hex : root.themeBackground
       border.width: swatch.value ? 0 : Math.max(1, Style.space(1))
       border.color: root.muted
@@ -2045,37 +2153,215 @@ Item {
       anchors.margins: -Style.space(3)
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.preview(swatch.termIndex, Palette.tintLook(swatch.value), "background")
-      onExited: previewEnd.restart()
-      onClicked: root.applyCardTint(swatch.termIndex, swatch.value)
+      onEntered: {
+        root.hoverText = swatch.value ? Palette.hue(swatch.value).name + " tint · keeps the text colours" : "No tint · the terminal's own background"
+        root.preview(root.current, Palette.tintLook(swatch.value), "background")
+      }
+      onExited: { root.hoverText = ""; previewEnd.restart() }
+      onClicked: root.applyTintTargets(swatch.value)
     }
   }
 
-  component TabButton: Text {
+  component TabButton: Item {
     id: tabButton
     property string name: ""
-    color: root.tab === name ? root.text : tabArea.containsMouse ? root.text : root.muted
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.body
-    font.bold: root.tab === name
+    readonly property bool on: root.tab === name
+    width: tabText.implicitWidth + Style.space(4)
+    height: tabText.implicitHeight + Style.space(18)
+    Accessible.role: Accessible.PageTab
+    Accessible.name: root.tabNames[name] || name
+    Accessible.onPressAction: { root.endPreview(); root.tab = tabButton.name; root.tabChosen = true }
+
+    Text {
+      id: tabText
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.tabNames[tabButton.name] || tabButton.name
+      color: tabButton.on || tabArea.containsMouse ? root.text : root.muted
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.subtitle
+      font.bold: tabButton.on
+    }
 
     Rectangle {
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.top: parent.bottom
-      anchors.topMargin: Style.space(3)
-      height: Math.max(1, Style.space(2))
+      anchors.bottom: parent.bottom
+      height: Math.max(2, Style.space(2))
+      radius: height / 2
       color: root.accent
-      visible: root.tab === tabButton.name
+      visible: tabButton.on
     }
 
     MouseArea {
       id: tabArea
       anchors.fill: parent
-      anchors.margins: -Style.space(4)
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: { root.tab = tabButton.name; root.tabChosen = true }
+      onClicked: { root.endPreview(); root.tab = tabButton.name; root.tabChosen = true; keyCatcher.forceActiveFocus() }
+    }
+  }
+
+  // A row of mutually exclusive choices in one outline, the current one filled.
+  component Segmented: Rectangle {
+    id: seg
+    property var options: []      // [{id, label}]
+    property string current: ""
+    signal picked(string id)
+    width: segRow.implicitWidth + Style.space(6)
+    height: segRow.implicitHeight + Style.space(6)
+    radius: Style.cornerRadius
+    color: "transparent"
+    border.width: Math.max(1, Style.space(1))
+    border.color: root.subtle
+
+    Row {
+      id: segRow
+      anchors.centerIn: parent
+      spacing: Style.space(2)
+      Repeater {
+        model: seg.options
+        delegate: Rectangle {
+          id: segItem
+          required property var modelData
+          readonly property bool on: seg.current === modelData.id
+          width: segText.implicitWidth + Style.space(18)
+          height: segText.implicitHeight + Style.space(10)
+          radius: Math.max(0, Style.cornerRadius - Style.space(2))
+          color: on ? Color.menu.selectedBackground : segArea.containsMouse ? Util.alpha(root.text, 0.06) : "transparent"
+          Accessible.role: Accessible.Button
+          Accessible.name: modelData.label
+          Accessible.onPressAction: seg.picked(segItem.modelData.id)
+          Text {
+            id: segText
+            anchors.centerIn: parent
+            text: segItem.modelData.label
+            color: segItem.on || segArea.containsMouse ? root.text : root.muted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: segItem.on
+          }
+          MouseArea {
+            id: segArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: { seg.picked(segItem.modelData.id); keyCatcher.forceActiveFocus() }
+          }
+        }
+      }
+    }
+  }
+
+  // Small capitals over a group of controls.
+  component SectionLabel: Text {
+    color: root.muted
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.letterSpacing: Style.space(1)
+    font.capitalization: Font.AllUppercase
+  }
+
+  // A key, drawn as a keycap.
+  component Keycap: Rectangle {
+    id: keycap
+    property string label: ""
+    width: Math.max(height, keyText.implicitWidth + Style.space(10))
+    height: keyText.implicitHeight + Style.space(4)
+    radius: Style.space(4)
+    color: "transparent"
+    border.width: Math.max(1, Style.space(1))
+    border.color: root.subtle
+    Text {
+      id: keyText
+      anchors.centerIn: parent
+      text: keycap.label
+      color: root.muted
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  // One switch in Settings: what it does, its key, and the switch.
+  component SettingRow: Rectangle {
+    id: settingRow
+    property string name: ""
+    property string detail: ""
+    property string key: ""
+    property bool checked: false
+    signal toggled()
+    width: parent ? parent.width : 0
+    height: Math.max(settingText.implicitHeight, settingSwitch.height) + Style.space(24)
+    color: "transparent"
+    Accessible.role: Accessible.CheckBox
+    Accessible.name: name
+    Accessible.checked: checked
+    Accessible.onToggleAction: settingRow.toggled()
+
+    Column {
+      id: settingText
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(14)
+      anchors.right: settingKey.left
+      anchors.rightMargin: Style.space(14)
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(4)
+      Text {
+        text: settingRow.name
+        color: root.text
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      Text {
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: settingRow.detail
+        color: root.muted
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+    }
+    Keycap {
+      id: settingKey
+      visible: settingRow.key !== ""
+      label: settingRow.key
+      anchors.right: settingSwitch.left
+      anchors.rightMargin: Style.space(12)
+      anchors.verticalCenter: parent.verticalCenter
+    }
+    ToggleSwitch {
+      id: settingSwitch
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(14)
+      anchors.verticalCenter: parent.verticalCenter
+      checked: settingRow.checked
+      onToggled: settingRow.toggled()
+    }
+    Rectangle {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      height: Math.max(1, Style.space(1))
+      color: root.subtle
+    }
+  }
+
+  // A bordered group in a tab or in Settings.
+  component Group: Rectangle {
+    default property alias content: panelColumn.data
+    property alias spacing: panelColumn.spacing
+    height: panelColumn.implicitHeight + Style.space(28)
+    radius: Style.cornerRadius
+    color: Util.alpha(root.text, 0.02)
+    border.width: Math.max(1, Style.space(1))
+    border.color: root.subtle
+    Column {
+      id: panelColumn
+      x: Style.space(14)
+      y: Style.space(14)
+      width: parent.width - Style.space(28)
+      spacing: Style.space(12)
     }
   }
 
@@ -2121,6 +2407,13 @@ Item {
         text = colorField.value
       }
       Keys.onEscapePressed: { text = colorField.value; keyCatcher.forceActiveFocus() }
+      // No paste: Qt reads the whole clipboard offer before maximumLength and the
+      // validator apply, so a huge or endless clipboard could stall the shell.
+      // A colour is seven characters; type it.
+      Keys.onPressed: function (event) {
+        if (event.matches(StandardKey.Paste) || (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier)))
+          event.accepted = true
+      }
     }
   }
 
@@ -2360,23 +2653,21 @@ Item {
 
     MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
 
+    // Two columns: the terminals on the left, what to give them on the right.
+    // Settings swaps both columns for its sections.
     BorderSurface {
       id: card
       anchors.centerIn: parent
-      width: Math.min(content.implicitWidth + root.pad * 2, panel.width - Style.gapsOut * 4)
-      height: Math.min(content.implicitHeight + root.pad * 2, panel.height - Style.gapsOut * 4)
+      width: Math.min(panel.width - Style.gapsOut * 4, Style.space(1240))
+      height: Math.min(panel.height - Style.gapsOut * 4, Style.space(820))
       radius: Style.cornerRadius
       color: root.surface
       borderSpec: root.borderSpec
 
-      MouseArea { anchors.fill: parent; onClicked: {} }
+      MouseArea { anchors.fill: parent; onClicked: keyCatcher.forceActiveFocus() }
 
-      Flickable {
+      Item {
         id: keyCatcher
-        contentWidth: content.width
-        contentHeight: content.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
         anchors.fill: parent
         anchors.margins: root.pad
         focus: true
@@ -2385,8 +2676,20 @@ Item {
           var k = event.key
           var shift = (event.modifiers & Qt.ShiftModifier) !== 0
           var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
-          if (root.browsing && root.tab === "wallpapers" && !ctrl && root.browserKey(k)) { event.accepted = true; return }
-          if (ctrl && k === Qt.Key_F) { terminalSearch.forceActiveFocus(); terminalSearch.selectAll() }
+          if (k === Qt.Key_B && !ctrl) root.setBorders(!root.borders)
+          else if (k === Qt.Key_P && !ctrl) root.setPulse(!root.pulse)
+          else if (k === Qt.Key_O && !ctrl) root.setSolid(!root.solid)
+          else if (k === Qt.Key_T && !ctrl) root.setTextShadow(!root.textShadow)
+          else if (k === Qt.Key_G && !ctrl) root.setGlass(!root.glass)
+          else if (root.view === "settings") {
+            if (k === Qt.Key_Escape || k === Qt.Key_Backspace || k === Qt.Key_Comma) root.view = "style"
+            else if (k === Qt.Key_Return || k === Qt.Key_Enter) root.dismiss()
+            else if (k === Qt.Key_Up || k === Qt.Key_K || k === Qt.Key_Backtab) root.nextSection(-1)
+            else if (k === Qt.Key_Down || k === Qt.Key_J || k === Qt.Key_Tab) root.nextSection(1)
+            else return
+          }
+          else if (root.browsing && root.tab === "wallpapers" && !ctrl && root.browserKey(k)) { }
+          else if (ctrl && k === Qt.Key_F) { terminalSearch.forceActiveFocus(); terminalSearch.selectAll() }
           else if (ctrl && k === Qt.Key_Z) root.travelHistory(root.current, shift ? "redo" : "undo")
           else if (ctrl && k === Qt.Key_Y) root.travelHistory(root.current, "redo")
           else if (ctrl && k === Qt.Key_A) root.selectVisible(false)
@@ -2394,28 +2697,22 @@ Item {
           else if (ctrl && k === Qt.Key_S) { root.tab = "saved"; root.tabChosen = true; savedName.forceActiveFocus() }
           else if (ctrl) return
           else if (k === Qt.Key_Slash) terminalSearch.forceActiveFocus()
+          else if (k === Qt.Key_Comma) root.showSettings("")
           else if (k === Qt.Key_Escape || k === Qt.Key_Return || k === Qt.Key_Enter) root.dismiss()
-          else if (k === Qt.Key_Tab) root.nextTab(1)
-          else if (k === Qt.Key_Backtab) root.nextTab(-1)
+          else if (k === Qt.Key_Tab || k === Qt.Key_Right) root.nextTab(1)
+          else if (k === Qt.Key_Backtab || k === Qt.Key_Left) root.nextTab(-1)
           else if (k === Qt.Key_W && root.tab === "moods") root.stepSource(shift ? -1 : 1)
           else if (k === Qt.Key_X && root.tab === "moods" && root.activeMoodSource) {
             if (root.hiddenSources.indexOf(root.activeMoodSource) >= 0) root.unhideSource(root.activeMoodSource)
             else root.hideSource(root.activeMoodSource)
           }
           else if (k === Qt.Key_H && (root.tab === "moods" || root.tab === "wallpapers")) root.showHidden = !root.showHidden
-          else if (k === Qt.Key_B) root.setBorders(!root.borders)
-          else if (k === Qt.Key_P) root.setPulse(!root.pulse)
-          else if (k === Qt.Key_O) root.setSolid(!root.solid)
-          else if (k === Qt.Key_T) root.setTextShadow(!root.textShadow)
-          else if (k === Qt.Key_G) root.setGlass(!root.glass)
           else if (k === Qt.Key_D && root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
           else if (k === Qt.Key_F && root.selectedTerm) root.saveProjectFrom(root.selectedTerm)
           else if (k === Qt.Key_A && root.tab === "wallpapers") root.openBrowser()
           else if (root.filteredTerminals.length === 0) return
-          else if (k === Qt.Key_Right || k === Qt.Key_L) root.moveCurrent(1, true)
-          else if (k === Qt.Key_Left || k === Qt.Key_H) root.moveCurrent(-1, true)
-          else if (k === Qt.Key_Down || k === Qt.Key_J) root.moveCurrent(root.columns, false)
-          else if (k === Qt.Key_Up || k === Qt.Key_K) root.moveCurrent(-root.columns, false)
+          else if (k === Qt.Key_Down || k === Qt.Key_J) root.moveCurrent(1, false)
+          else if (k === Qt.Key_Up || k === Qt.Key_K) root.moveCurrent(-1, false)
           else if (k >= Qt.Key_1 && k <= Qt.Key_8) root.applyTintTargets(Palette.HUES[k - Qt.Key_1].id)
           else if (k === Qt.Key_0 || k === Qt.Key_Backspace || k === Qt.Key_Delete) {
             if (root.tab === "wallpapers") root.applyWallpaperTargets(null)
@@ -2427,300 +2724,1595 @@ Item {
           event.accepted = true
         }
 
-        Column {
-          id: content
-          width: root.contentWidth
-          spacing: root.gap
+        // ---- Header: brand, search, filter, settings, close ----
+        Item {
+          id: header
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          height: Style.space(48)
 
-          Item {
-            width: parent.width
-            height: Style.space(68)
-
-            Row {
-              anchors.left: parent.left
+          Row {
+            id: brand
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(10)
+            Image {
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(12)
-              Column {
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(3)
-                Image {
-                  source: Qt.resolvedUrl("assets/promo/ombre-mark.svg")
-                  width: Style.space(44)
-                  height: width
-                  sourceSize: Qt.size(width * 2, height * 2)
-                  Accessible.ignored: true
-                }
-                Text {
-                  objectName: "ombreVersionLabel"
-                  text: root.pluginVersion ? "v" + root.pluginVersion : "—"
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  Accessible.name: root.pluginVersion ? "Ombre version " + root.pluginVersion : "Ombre version unavailable"
-                }
-              }
-              Column {
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(3)
-                Text {
-                  text: "OMBRE"
-                  color: root.text
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.heading
-                  font.letterSpacing: Style.space(2)
-                  font.bold: true
-                }
-                Text {
-                  text: "Terminal colors & backgrounds"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-              }
+              source: Qt.resolvedUrl("assets/brand/ombre-mark.svg")
+              width: Style.space(34)
+              height: width
+              sourceSize: Qt.size(width * 2, height * 2)
+              Accessible.ignored: true
             }
-
-            Row {
-              anchors.right: parent.right
+            Column {
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(6)
-              TextButton {
-                visible: root.catalog.launcher
-                label: "Text shadow"
-                chosen: root.textShadow
-                onActivated: root.setTextShadow(!root.textShadow)
+              spacing: Style.space(2)
+              Text {
+                text: "OMBRE"
+                color: root.text
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                font.letterSpacing: Style.space(3)
+                font.bold: true
               }
-              TextButton {
-                visible: root.catalog.launcher
-                label: "Glass"
-                chosen: root.glass
-                onActivated: root.setGlass(!root.glass)
-              }
-              TextButton {
-                visible: root.catalog.ghostty
-                label: "Solid windows"
-                chosen: root.solid
-                onActivated: root.setSolid(!root.solid)
-              }
-              TextButton {
-                label: "Pulse"
-                chosen: root.pulse
-                onActivated: root.setPulse(!root.pulse)
-              }
-              TextButton {
-                label: "Borders"
-                chosen: root.borders
-                onActivated: root.setBorders(!root.borders)
+              Text {
+                objectName: "ombreVersionLabel"
+                text: root.pluginVersion ? "v" + root.pluginVersion : "—"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                Accessible.name: root.pluginVersion ? "Ombre version " + root.pluginVersion : "Ombre version unavailable"
               }
             }
           }
 
-          Row {
-            width: parent.width
-            spacing: Style.space(8)
-            TextField {
-              id: terminalSearch
-              objectName: "ombreTerminalSearch"
-              width: parent.width - filterButtons.implicitWidth - Style.space(8)
-              placeholderText: "Search terminals, projects or workspaces…"
-              text: root.searchText
-              onTextChanged: if (root.searchText !== text) root.searchText = text
-              onAccepted: keyCatcher.forceActiveFocus()
-              Keys.onEscapePressed: { text = ""; keyCatcher.forceActiveFocus() }
-              Accessible.name: "Search terminals by title or project"
-            }
-            Row {
-              id: filterButtons
-              spacing: Style.space(8)
-              TextButton { label: "All workspaces"; chosen: !root.workspaceOnly; onActivated: root.workspaceOnly = false }
-              TextButton { label: "This workspace"; chosen: root.workspaceOnly; onActivated: root.workspaceOnly = true }
-              TextButton { label: "Clear filters"; enabled: root.searchText !== "" || root.workspaceOnly; onActivated: { root.searchText = ""; root.workspaceOnly = false } }
-            }
-          }
-          Row {
-            spacing: Style.space(8)
-            TextButton { label: "Select visible"; enabled: root.filteredTerminals.length > 0; onActivated: root.selectVisible(false) }
-            TextButton { label: "Select workspace"; enabled: root.filteredTerminals.some(function (t) { return t.workspace === root.openingWorkspace }); onActivated: root.selectVisible(true) }
-            TextButton { label: "Clear selection"; enabled: root.markedKeys.length > 0; onActivated: root.markedKeys = [] }
-            TextButton { label: "Undo"; enabled: root.selectedHistory.past.length > 0; onActivated: root.travelHistory(root.current, "undo") }
-            TextButton { label: "Redo"; enabled: root.selectedHistory.future.length > 0; onActivated: root.travelHistory(root.current, "redo") }
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.filteredTerminals.length + "/" + root.terminals.length + " visible · " + root.actionTargets.length + (root.markedKeys.length ? " selected" : " target")
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
+          TextField {
+            id: terminalSearch
+            objectName: "ombreTerminalSearch"
+            visible: root.view === "style"
+            anchors.left: brand.right
+            anchors.leftMargin: Style.space(28)
+            anchors.right: headerRight.left
+            anchors.rightMargin: Style.space(16)
+            anchors.verticalCenter: parent.verticalCenter
+            placeholderText: "Find a terminal, project or workspace   ( / )"
+            text: root.searchText
+            onTextChanged: if (root.searchText !== text) root.searchText = text
+            onAccepted: keyCatcher.forceActiveFocus()
+            Keys.onEscapePressed: { text = ""; keyCatcher.forceActiveFocus() }
+            Accessible.name: "Search terminals by title, project or workspace"
           }
 
           Text {
-            visible: root.filteredTerminals.length === 0
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: root.terminals.length ? "No terminals match. Clear the search or switch to All workspaces." : scanner.running ? "Looking for terminals…"
-              : "No terminal windows found. Ombre works with terminals that run one process per window (Ghostty through Ombre's launcher, foot, Alacritty, Kitty)."
-            color: root.muted
+            visible: root.view === "settings"
+            anchors.left: brand.right
+            anchors.leftMargin: Style.space(28)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Settings"
+            color: root.text
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
+            font.pixelSize: Style.font.title
+            font.bold: true
           }
 
-          // Terminal cards scroll when there are more than fit.
-          Flickable {
-            id: cardsView
-            width: grid.width
-            height: Math.min(grid.implicitHeight, Math.max(Style.space(240), panel.height * 0.42))
-            contentWidth: grid.width
-            contentHeight: grid.implicitHeight
-            clip: true
-            interactive: contentHeight > height
-            boundsBehavior: Flickable.StopAtBounds
+          Row {
+            id: headerRight
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(8)
+            Segmented {
+              visible: root.view === "style"
+              anchors.verticalCenter: parent.verticalCenter
+              options: [{ id: "all", label: "All workspaces" }, { id: "here", label: "This workspace" }]
+              current: root.workspaceOnly ? "here" : "all"
+              onPicked: function (id) { root.workspaceOnly = id === "here" }
+            }
+            TextButton {
+              anchors.verticalCenter: parent.verticalCenter
+              label: root.view === "settings" ? "← Back to styling" : "󰒓  Settings"
+              chosen: root.view === "settings"
+              Accessible.name: root.view === "settings" ? "Back to styling" : "Settings"
+              onActivated: { if (root.view === "settings") root.view = "style"; else root.showSettings(""); keyCatcher.forceActiveFocus() }
+            }
+            TextButton {
+              anchors.verticalCenter: parent.verticalCenter
+              label: "×"
+              Accessible.name: "Close Ombre"
+              onActivated: root.dismiss()
+            }
+          }
+        }
 
-            Grid {
-              id: grid
-              columns: root.columns
-              spacing: root.gap
+        Rectangle {
+          id: headerRule
+          anchors.top: header.bottom
+          anchors.topMargin: Style.space(10)
+          anchors.left: parent.left
+          anchors.right: parent.right
+          height: Math.max(1, Style.space(1))
+          color: root.subtle
+        }
 
-              Repeater {
-                model: root.opened ? root.filteredTerminals : []
+        // ---- Footer: what the pointer is over, or the keys ----
+        Text {
+          id: footer
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          elide: Text.ElideRight
+          text: root.hoverText || (root.view === "settings"
+            ? "↑ ↓ section · B P O T G switch effects · Esc back to styling"
+            : "↑ ↓ terminal · ← → tab · Ctrl+Space tick · Space next look · 1–8 tint · Ctrl+Z undo · Ctrl+S save · , settings · Esc close")
+          color: root.muted
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
 
-                delegate: Rectangle {
-                  id: tile
-                  required property var modelData
-                  required property int index
-                  readonly property int termIndex: modelData.sourceIndex
-                  readonly property bool selected: termIndex === root.current
-                  readonly property bool marked: root.markedKeys.indexOf(Workspace.key(modelData)) >= 0
-                  readonly property real aspect: Math.max(0.2, Math.min(5, modelData.h / Math.max(1, modelData.w)))
-                  readonly property var look: modelData.look
+        Rectangle {
+          id: footerRule
+          anchors.bottom: footer.top
+          anchors.bottomMargin: Style.space(10)
+          anchors.left: parent.left
+          anchors.right: parent.right
+          height: Math.max(1, Style.space(1))
+          color: root.subtle
+        }
 
-                  width: root.cardWidth
-                  height: tileColumn.implicitHeight + Style.space(10) * 2
-                  radius: Style.cornerRadius
-                  color: selected ? Color.menu.selectedBackground : "transparent"
-                  border.width: Math.max(1, Style.space(selected ? 2 : 1))
-                  border.color: selected || marked ? root.accent : root.subtle
+        Item {
+          id: body
+          anchors.top: headerRule.bottom
+          anchors.topMargin: Style.space(14)
+          anchors.bottom: footerRule.top
+          anchors.bottomMargin: Style.space(12)
+          anchors.left: parent.left
+          anchors.right: parent.right
 
-                  onSelectedChanged: if (selected) {
-                    if (y < cardsView.contentY) cardsView.contentY = y
-                    else if (y + height > cardsView.contentY + cardsView.height)
-                      cardsView.contentY = y + height - cardsView.height
-                  }
+          readonly property int sideWidth: Math.min(Style.space(340), Math.round(width * 0.32))
 
+          // ======== Styling ========
+          Item {
+            id: styleView
+            anchors.fill: parent
+            visible: root.view === "style"
+
+            // ---- Terminals ----
+            Item {
+              id: side
+              anchors.left: parent.left
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: body.sideWidth
+
+              Item {
+                id: sideHead
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: Style.space(26)
+                SectionLabel {
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(4)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Terminals · " + (root.markedKeys.length ? root.markedKeys.length + " ticked"
+                    : root.filteredTerminals.length + (root.filteredTerminals.length === root.terminals.length ? " open" : " of " + root.terminals.length))
+                }
+                Text {
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(4)
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: root.filteredTerminals.length > 1
+                  text: root.markedKeys.length ? "Clear ticks" : "Tick all"
+                  color: tickAllArea.containsMouse ? root.text : root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
                   MouseArea {
+                    id: tickAllArea
                     anchors.fill: parent
+                    anchors.margins: -Style.space(4)
+                    hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: function (mouse) { root.selectCard(tile.termIndex, (mouse.modifiers & Qt.ControlModifier) !== 0); keyCatcher.forceActiveFocus() }
+                    onClicked: { if (root.markedKeys.length) root.markedKeys = []; else root.selectVisible(false); keyCatcher.forceActiveFocus() }
                   }
+                }
+              }
 
-                  Column {
-                    id: tileColumn
-                    x: Style.space(10)
-                    y: Style.space(10)
-                    width: parent.width - Style.space(20)
-                    spacing: Style.space(8)
+              Text {
+                visible: root.filteredTerminals.length === 0
+                anchors.top: sideHead.bottom
+                anchors.topMargin: Style.space(10)
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(4)
+                wrapMode: Text.WordWrap
+                text: root.terminals.length ? "No terminals match. Clear the search or switch to All workspaces." : scanner.running ? "Looking for terminals…"
+                  : "No terminal windows found. Ombre works with terminals that run one process per window (Ghostty through Ombre's launcher, foot, Alacritty, Kitty)."
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
 
-                    Rectangle {
-                      id: frame
-                      readonly property real innerWidth: width - border.width * 2
-                      readonly property real innerHeight: height - border.width * 2
+              Flickable {
+                id: termList
+                anchors.top: sideHead.bottom
+                anchors.topMargin: Style.space(8)
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: sideHint.top
+                anchors.bottomMargin: Style.space(8)
+                contentWidth: width
+                contentHeight: termColumn.implicitHeight
+                clip: true
+                interactive: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
 
-                      width: parent.width
-                      height: Math.round(width * 0.6)
-                      color: Palette.lookBackground(tile.look, root.themeBackground) || root.themeBackground
-                      border.width: Math.max(1, Style.space(2))
-                      border.color: Palette.lookAccent(tile.look) || root.subtle
-                      clip: true
+                Column {
+                  id: termColumn
+                  width: termList.width
+                  spacing: Style.space(4)
 
-                      // Letterboxed so every card is the same size whatever the window shape.
-                      ScreencopyView {
-                        anchors.centerIn: parent
-                        width: Math.min(frame.innerWidth, frame.innerHeight / tile.aspect)
-                        height: Math.min(frame.innerHeight, frame.innerWidth * tile.aspect)
-                        captureSource: root.toplevelFor(tile.modelData.address)
-                        live: root.opened
+                  Repeater {
+                    model: root.opened ? root.filteredTerminals : []
+
+                    delegate: Rectangle {
+                      id: row
+                      required property var modelData
+                      readonly property int termIndex: modelData.sourceIndex
+                      readonly property bool selected: termIndex === root.current
+                      readonly property bool marked: root.markedKeys.indexOf(Workspace.key(modelData)) >= 0
+                      readonly property real aspect: Math.max(0.2, Math.min(5, modelData.h / Math.max(1, modelData.w)))
+                      readonly property var look: modelData.look
+                      readonly property string where: modelData.root || modelData.cwd || ""
+
+                      width: termColumn.width
+                      height: Style.space(78)
+                      radius: Style.cornerRadius
+                      color: selected ? Color.menu.selectedBackground
+                        : marked ? Util.alpha(root.accent, 0.10)
+                        : rowArea.containsMouse ? Util.alpha(root.text, 0.05) : "transparent"
+                      border.width: Math.max(1, Style.space(selected ? 2 : 1))
+                      border.color: selected ? root.accent : "transparent"
+                      Accessible.role: Accessible.ListItem
+                      Accessible.name: modelData.title + (marked ? ", ticked" : "")
+
+                      onSelectedChanged: if (selected) {
+                        if (y < termList.contentY) termList.contentY = y
+                        else if (y + height > termList.contentY + termList.height)
+                          termList.contentY = y + height - termList.height
                       }
 
-                      Rectangle {
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.margins: Style.space(6)
-                        width: wsText.implicitWidth + Style.space(10)
-                        height: wsText.implicitHeight + Style.space(4)
-                        radius: height / 2
-                        color: Util.alpha(root.surface, 0.85)
-                        visible: tile.modelData.workspace !== ""
+                      MouseArea {
+                        id: rowArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: function (mouse) { root.selectCard(row.termIndex, (mouse.modifiers & Qt.ControlModifier) !== 0); keyCatcher.forceActiveFocus() }
+                      }
 
+                      // Tick box: add the terminal to the ones being styled.
+                      Rectangle {
+                        id: tick
+                        x: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Style.space(18)
+                        height: width
+                        radius: Style.space(4)
+                        color: row.marked ? root.accent : "transparent"
+                        border.width: Math.max(1, Style.space(2))
+                        border.color: row.marked ? root.accent : tickArea.containsMouse ? root.text : root.muted
+                        Accessible.role: Accessible.CheckBox
+                        Accessible.name: (row.marked ? "Untick " : "Tick ") + row.modelData.title
+                        Accessible.checked: row.marked
+                        Accessible.onToggleAction: root.toggleMarked(row.termIndex)
                         Text {
-                          id: wsText
                           anchors.centerIn: parent
-                          text: tile.modelData.workspace
-                          color: root.text
+                          visible: row.marked
+                          text: "✓"
+                          color: Palette.isLight(String(root.accent)) ? "#000000" : "#ffffff"
                           font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
+                          font.pixelSize: Style.font.bodySmall
                           font.bold: true
                         }
+                        MouseArea {
+                          id: tickArea
+                          anchors.fill: parent
+                          anchors.margins: -Style.space(6)
+                          hoverEnabled: true
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: { root.toggleMarked(row.termIndex); keyCatcher.forceActiveFocus() }
+                        }
                       }
-                      TextButton {
+
+                      // Live thumbnail in the terminal's own colours.
+                      Rectangle {
+                        id: thumb
+                        readonly property real innerWidth: width - border.width * 2
+                        readonly property real innerHeight: height - border.width * 2
+                        anchors.left: tick.right
+                        anchors.leftMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Style.space(104)
+                        height: Style.space(62)
+                        radius: Style.space(4)
+                        color: Palette.lookBackground(row.look, root.themeBackground) || root.themeBackground
+                        border.width: Math.max(1, Style.space(2))
+                        border.color: Palette.lookAccent(row.look) || root.subtle
+                        clip: true
+
+                        ScreencopyView {
+                          anchors.centerIn: parent
+                          width: Math.min(thumb.innerWidth, thumb.innerHeight / row.aspect)
+                          height: Math.min(thumb.innerHeight, thumb.innerWidth * row.aspect)
+                          captureSource: root.toplevelFor(row.modelData.address)
+                          live: root.opened && root.view === "style"
+                        }
+                      }
+
+                      Column {
+                        anchors.left: thumb.right
+                        anchors.leftMargin: Style.space(10)
                         anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Style.space(6)
-                        label: tile.marked ? "✓" : "+"
-                        chosen: tile.marked
-                        Accessible.name: (tile.marked ? "Deselect " : "Select ") + tile.modelData.title
-                        onActivated: { root.toggleMarked(tile.termIndex); keyCatcher.forceActiveFocus() }
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(4)
+
+                        Row {
+                          width: parent.width
+                          spacing: Style.space(6)
+                          Text {
+                            width: Math.min(implicitWidth, parent.width - (needsYou.visible ? needsYou.width + Style.space(6) : 0))
+                            text: row.modelData.title
+                            elide: Text.ElideRight
+                            color: root.text
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.body
+                            font.bold: true
+                          }
+                          // The agent here finished and is waiting.
+                          Rectangle {
+                            id: needsYou
+                            visible: root.pulses[row.modelData.address] !== undefined
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(8)
+                            height: width
+                            radius: width / 2
+                            color: Palette.lookAccent(row.look) || root.accent
+                          }
+                        }
+                        Text {
+                          width: parent.width
+                          visible: text !== ""
+                          text: row.where ? Palette.tildePath(row.where, root.home) : (row.modelData.cls || "")
+                          elide: Text.ElideMiddle
+                          color: root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                        Row {
+                          width: parent.width
+                          spacing: Style.space(6)
+                          Rectangle {
+                            visible: row.modelData.workspace !== ""
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: wsText.implicitWidth + Style.space(10)
+                            height: wsText.implicitHeight + Style.space(2)
+                            radius: Style.space(3)
+                            color: Util.alpha(root.text, 0.08)
+                            Text {
+                              id: wsText
+                              anchors.centerIn: parent
+                              text: "ws " + row.modelData.workspace
+                              color: root.text
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.caption
+                            }
+                          }
+                          Rectangle {
+                            visible: row.look !== null
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(8)
+                            height: width
+                            radius: Style.space(2)
+                            color: Palette.lookAccent(row.look) || "transparent"
+                          }
+                          Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.max(0, parent.width - x)
+                            text: {
+                              var parts = [row.look ? Palette.lookLabel(row.look) : "Own colours"]
+                              if (row.modelData.wallpaper) parts.push("󰋩 " + Palette.basename(row.modelData.wallpaper.path))
+                              if (row.modelData.visible === false) parts.push("off screen")
+                              return parts.join(" · ")
+                            }
+                            elide: Text.ElideRight
+                            color: root.muted
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              Text {
+                id: sideHint
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: Style.space(4)
+                wrapMode: Text.WordWrap
+                text: "Click a terminal to style it. Tick several to style them together."
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Rectangle {
+              id: sideRule
+              anchors.left: side.right
+              anchors.leftMargin: Style.space(16)
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: Math.max(1, Style.space(1))
+              color: root.subtle
+            }
+
+            // ---- Styling ----
+            Item {
+              id: main
+              anchors.left: sideRule.right
+              anchors.leftMargin: Style.space(20)
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+
+              // Who gets the next pick, with undo and redo for the selected one.
+              Item {
+                id: targetRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: Math.max(targetFlow.implicitHeight, historyRow.height, Style.space(28))
+
+                SectionLabel {
+                  id: stylingLabel
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Styling"
+                }
+                Flow {
+                  id: targetFlow
+                  anchors.left: stylingLabel.right
+                  anchors.leftMargin: Style.space(12)
+                  anchors.right: historyRow.left
+                  anchors.rightMargin: Style.space(12)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(6)
+                  Repeater {
+                    model: root.actionTargets.slice(0, 4)
+                    delegate: Rectangle {
+                      id: targetChip
+                      required property var modelData
+                      readonly property var term: root.terminals[modelData] || null
+                      width: Math.min(chipRow.implicitWidth + Style.space(16), Style.space(220))
+                      height: chipRow.implicitHeight + Style.space(8)
+                      radius: height / 2
+                      color: Util.alpha(root.text, 0.07)
+                      Row {
+                        id: chipRow
+                        anchors.left: parent.left
+                        anchors.leftMargin: Style.space(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(6)
+                        Rectangle {
+                          anchors.verticalCenter: parent.verticalCenter
+                          width: Style.space(8)
+                          height: width
+                          radius: Style.space(2)
+                          color: (targetChip.term && Palette.lookAccent(targetChip.term.look)) || root.muted
+                        }
+                        Text {
+                          width: Math.min(implicitWidth, Style.space(180))
+                          text: targetChip.term ? targetChip.term.title : ""
+                          elide: Text.ElideRight
+                          color: root.text
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                        }
+                      }
+                    }
+                  }
+                  Text {
+                    visible: root.actionTargets.length > 4
+                    height: Style.space(24)
+                    verticalAlignment: Text.AlignVCenter
+                    text: "+" + (root.actionTargets.length - 4) + " more"
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  Text {
+                    visible: root.selectedTerm !== null && root.markedKeys.length === 0 && root.selectedTerm.visible === false
+                    height: Style.space(24)
+                    verticalAlignment: Text.AlignVCenter
+                    text: root.selectedTerm ? "on workspace " + root.selectedTerm.workspace + ", not on screen" : ""
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+                Row {
+                  id: historyRow
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(6)
+                  TextButton { label: "Undo"; enabled: root.selectedHistory.past.length > 0; onActivated: root.travelHistory(root.current, "undo") }
+                  TextButton { label: "Redo"; enabled: root.selectedHistory.future.length > 0; onActivated: root.travelHistory(root.current, "redo") }
+                }
+              }
+
+              // Tabs, and which layer a pick changes.
+              Item {
+                id: tabBar
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: targetRow.bottom
+                anchors.topMargin: Style.space(10)
+                height: Math.max(tabRow.height, scopeRow.height)
+
+                Row {
+                  id: tabRow
+                  anchors.left: parent.left
+                  anchors.bottom: parent.bottom
+                  spacing: Style.space(24)
+                  Repeater {
+                    model: root.tabs
+                    delegate: TabButton {
+                      required property var modelData
+                      name: modelData
+                    }
+                  }
+                }
+
+                Row {
+                  id: scopeRow
+                  visible: root.tab !== "wallpapers"
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(8)
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Change"
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  Segmented {
+                    anchors.verticalCenter: parent.verticalCenter
+                    options: [{ id: "all", label: "Everything" }, { id: "text", label: "Text" }, { id: "background", label: "Background" }]
+                    current: root.applyScope
+                    onPicked: function (id) { root.endPreview(); root.applyScope = id }
+                  }
+                }
+              }
+
+              Rectangle {
+                id: tabRule
+                anchors.top: tabBar.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: Math.max(1, Style.space(1))
+                color: root.subtle
+              }
+
+              Flickable {
+                id: tabView
+                anchors.top: tabRule.bottom
+                anchors.topMargin: Style.space(16)
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                contentWidth: width
+                contentHeight: tabContent.implicitHeight + Style.space(8)
+                clip: true
+                interactive: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
+                onVisibleChanged: contentY = 0
+
+                Connections {
+                  target: root
+                  function onTabChanged() { tabView.contentY = 0 }
+                }
+
+                Column {
+                  id: tabContent
+                  width: tabView.width
+                  spacing: Style.space(14)
+
+                  // ---- Looks: saved looks and favourites ----
+                  Column {
+                    visible: root.tab === "saved"
+                    width: parent.width
+                    spacing: Style.space(10)
+                    Row {
+                      spacing: Style.space(8)
+                      TextField {
+                        id: savedName
+                        objectName: "ombreSavedName"
+                        width: Style.space(280)
+                        maximumLength: 64
+                        placeholderText: root.editingSavedName ? "New name for " + root.editingSavedName : "Name the selected terminal’s look…"
+                        onAccepted: root.submitSavedName(text)
+                        Keys.onEscapePressed: { root.editingSavedName = ""; text = ""; keyCatcher.forceActiveFocus() }
+                        Accessible.name: "Saved look name"
+                      }
+                      TextButton { anchors.verticalCenter: parent.verticalCenter; label: root.editingSavedName ? "Rename" : "Save look"; enabled: root.editingSavedName !== "" || root.selectedTerm !== null; onActivated: root.submitSavedName(savedName.text) }
+                      TextButton { anchors.verticalCenter: parent.verticalCenter; visible: root.editingSavedName !== ""; label: "Cancel"; onActivated: { root.editingSavedName = ""; savedName.text = "" } }
+                      TextButton { anchors.verticalCenter: parent.verticalCenter; label: "★ Favourites only"; chosen: root.favoritesOnly; onActivated: root.favoritesOnly = !root.favoritesOnly }
+                    }
+                    Text {
+                      width: parent.width
+                      wrapMode: Text.WordWrap
+                      text: root.libraryMessage || "A look keeps the exact colours, wallpaper, strength and blur. Click one to give it to every terminal you're styling."
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                      visible: root.sortedLooks.length === 0
+                      text: root.savedLooks.length ? "No favourites yet. Star a look to keep it close." : "No saved looks yet. Give a terminal a look, then name it above."
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    Column {
+                      spacing: Style.space(8)
+                      Repeater {
+                        model: root.opened && root.tab === "saved" ? root.sortedLooks : []
+                        delegate: Row {
+                          id: savedRow
+                          required property var modelData
+                          spacing: Style.space(8)
+                          LookChip {
+                            width: Style.space(260)
+                            label: savedRow.modelData.name
+                            look: root.savedChipLook(savedRow.modelData)
+                            image: savedRow.modelData.wallpaper ? savedRow.modelData.wallpaper.path : ""
+                            chosen: root.selectedTerm !== null && Workspace.same(root.selectedTerm, savedRow.modelData)
+                            ring: root.accent
+                            fontFamily: root.fontFamily
+                            onHoverStarted: {
+                              root.preview(root.current, savedRow.modelData.look, root.applyScope)
+                              if (root.applyScope !== "text" && root.selectedTakesWallpaper) root.previewWallpaper(root.current, savedRow.modelData.wallpaper)
+                            }
+                            onHoverEnded: previewEnd.restart()
+                            onPicked: root.applySavedTargets(savedRow.modelData)
+                          }
+                          TextButton {
+                            anchors.verticalCenter: parent.verticalCenter
+                            label: savedRow.modelData.favorite ? "★" : "☆"
+                            chosen: savedRow.modelData.favorite
+                            Accessible.name: (savedRow.modelData.favorite ? "Unstar " : "Star ") + savedRow.modelData.name
+                            onActivated: root.favoriteNamedLook(savedRow.modelData.name)
+                          }
+                          TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Update"; enabled: root.selectedTerm !== null; onActivated: root.saveNamedLook(savedRow.modelData.name, root.selectedTerm, true) }
+                          TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Rename"; onActivated: { root.editingSavedName = savedRow.modelData.name; savedName.text = savedRow.modelData.name; savedName.forceActiveFocus(); savedName.selectAll() } }
+                          TextButton {
+                            anchors.verticalCenter: parent.verticalCenter
+                            label: root.pendingDeleteName === savedRow.modelData.name ? "Confirm delete" : "Delete"
+                            onActivated: {
+                              if (root.pendingDeleteName === savedRow.modelData.name) root.removeNamedLook(savedRow.modelData.name)
+                              else { root.pendingDeleteName = savedRow.modelData.name; root.libraryMessage = "Click Confirm delete to remove " + savedRow.modelData.name + "." }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // ---- Colours: tints, Aether palettes from any colour, exact colours ----
+                  Column {
+                    visible: root.tab === "colours"
+                    width: parent.width
+                    spacing: Style.space(12)
+
+                    SectionLabel { text: "Tint · keys 1–8, N for the next, 0 for none" }
+                    Row {
+                      spacing: Style.space(14)
+                      Repeater {
+                        model: Palette.HUES
+                        delegate: Swatch { required property var modelData; value: modelData.id }
+                      }
+                      Swatch { value: "" }
+                    }
+
+                    Item { width: 1; height: Style.space(4) }
+                    SectionLabel { text: "From any colour · full palettes made by Aether" }
+                    Text {
+                      visible: root.aetherBlocker !== ""
+                      width: parent.width
+                      wrapMode: Text.WordWrap
+                      text: root.aetherBlocker
+                      color: root.text
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    Row {
+                      visible: root.catalog.aether
+                      spacing: Style.space(10)
+                      Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Style.space(30)
+                        height: width
+                        radius: Style.cornerRadius
+                        color: root.baseColour
+                        border.width: Math.max(1, Style.space(1))
+                        border.color: root.subtle
+                      }
+                      ColorField {
+                        anchors.verticalCenter: parent.verticalCenter
+                        value: root.baseColour
+                        onApplied: function (value) { root.setBaseColour(value) }
+                      }
+                      Repeater {
+                        model: Palette.HUES.map(function (h) { return h.hex }).concat([root.accentHex])
+                        delegate: Rectangle {
+                          required property var modelData
+                          anchors.verticalCenter: parent.verticalCenter
+                          width: Style.space(18)
+                          height: width
+                          radius: width / 2
+                          color: modelData
+                          border.width: root.baseColour === String(modelData).toLowerCase() ? Math.max(2, Style.space(2)) : 0
+                          border.color: root.text
+                          MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -Style.space(3)
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onEntered: root.hoverText = "Make palettes from " + String(modelData).toLowerCase()
+                            onExited: root.hoverText = ""
+                            onClicked: root.setBaseColour(String(modelData).toLowerCase())
+                          }
+                        }
+                      }
+                    }
+                    Text {
+                      visible: root.catalog.aether && (root.colourRunning !== "" || root.colourMessage !== "" || root.colourLooks.length === 0)
+                      text: root.colourRunning ? "Aether is mixing palettes from " + root.colourRunning + "…"
+                        : root.colourMessage || "Type a colour or pick one to get six full palettes."
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    Flow {
+                      visible: root.colourLooks.length > 0
+                      width: parent.width
+                      spacing: Style.space(8)
+                      Repeater {
+                        model: root.opened && root.tab === "colours" ? root.colourLooks : []
+                        delegate: LookChip {
+                          required property var modelData
+                          look: modelData
+                          label: String(modelData.description).split(" palette")[0]
+                          chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
+                          ring: root.accent
+                          fontFamily: root.fontFamily
+                          onHoverStarted: { root.hoverText = modelData.description; root.preview(root.current, modelData) }
+                          onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
+                          onPicked: root.applyLookTargets(modelData)
+                        }
                       }
                     }
 
+                    Item { width: 1; height: Style.space(4) }
+                    SectionLabel { text: "Exact colours" }
+                    Row {
+                      width: parent.width
+                      spacing: Style.space(24)
+                      Repeater {
+                        model: ["text", "background"]
+                        delegate: Column {
+                          required property string modelData
+                          width: (parent.width - Style.space(24)) / 2
+                          spacing: Style.space(8)
+                          Row {
+                            spacing: Style.space(10)
+                            Text {
+                              text: modelData === "text" ? "Text" : "Background"
+                              color: root.text
+                              font.bold: true
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.body
+                            }
+                            Text {
+                              text: !root.selectedTerm ? "" : modelData === "text"
+                                ? Palette.textLabel(root.selectedTerm.look) : Palette.backgroundLabel(root.selectedTerm.look)
+                              color: root.muted
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.bodySmall
+                              width: Style.space(170)
+                              elide: Text.ElideRight
+                            }
+                          }
+                          Row {
+                            spacing: Style.space(8)
+                            ColorField {
+                              value: !root.selectedTerm ? "" : modelData === "text"
+                                ? Palette.lookForeground(root.selectedTerm.look) : Palette.lookBackground(root.selectedTerm.look, root.themeBackground)
+                              onApplied: function (value) { root.setLayerColor(modelData, value) }
+                            }
+                            TextButton {
+                              label: "Choose a mood"
+                              onActivated: { root.endPreview(); root.applyScope = modelData; root.tab = "moods"; root.tabChosen = true }
+                            }
+                            TextButton { label: "Reset"; onActivated: root.resetLayer(modelData) }
+                          }
+                          Row {
+                            visible: modelData === "text"
+                            spacing: Style.space(8)
+                            Repeater {
+                              model: Palette.HUES
+                              delegate: Rectangle {
+                                required property var modelData
+                                readonly property string textColor: Palette.mix(modelData.hex,
+                                  Palette.isLight(root.selectedTerm ? (Palette.lookBackground(root.selectedTerm.look, root.themeBackground) || root.themeBackground) : root.themeBackground)
+                                    ? "#000000" : "#ffffff", 0.35)
+                                width: root.swatchSize
+                                height: width
+                                radius: width / 2
+                                color: textColor
+                                border.width: root.selectedTerm && Palette.lookForeground(root.selectedTerm.look) === textColor ? 2 : 0
+                                border.color: root.text
+                                MouseArea {
+                                  anchors.fill: parent
+                                  hoverEnabled: true
+                                  cursorShape: Qt.PointingHandCursor
+                                  onEntered: root.hoverText = modelData.name + " text · keeps your background and syntax palette"
+                                  onExited: root.hoverText = ""
+                                  onClicked: root.setLayerColor("text", textColor)
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // ---- Moods: Aether styles from a wallpaper ----
+                  Column {
+                    visible: root.tab === "moods"
+                    width: parent.width
+                    spacing: Style.space(10)
+
                     Item {
                       width: parent.width
-                      height: titleLabel.implicitHeight
-
+                      height: Math.max(moodCount.implicitHeight, moodTools.height)
                       Text {
-                        id: titleLabel
+                        id: moodCount
                         anchors.left: parent.left
-                        width: parent.width - (lookLabel.text ? lookLabel.width + Style.space(8) : 0)
-                        text: tile.modelData.title
-                        elide: Text.ElideRight
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: root.catalog.aether
+                        text: root.catalog.modes.length + " Aether styles · moods, pastel, muted, colour harmonies"
+                        color: root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                      Row {
+                        id: moodTools
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(14)
+                        Text {
+                          anchors.verticalCenter: parent.verticalCenter
+                          visible: root.hiddenCount > 0
+                          text: (root.showHidden ? "Hide hidden (" : "Show hidden (") + root.hiddenCount + ")"
+                          color: moodHiddenArea.containsMouse ? root.text : root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          MouseArea { id: moodHiddenArea; anchors.fill: parent; anchors.margins: -Style.space(4); hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.showHidden = !root.showHidden }
+                        }
+                        Text {
+                          anchors.verticalCenter: parent.verticalCenter
+                          visible: root.applyScope !== "text" && root.selectedTakesWallpaper
+                          text: (root.withWallpaper ? "󰄲" : "󰄱") + " Bring its wallpaper"
+                          color: moodWithArea.containsMouse ? root.text : root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          MouseArea { id: moodWithArea; anchors.fill: parent; anchors.margins: -Style.space(4); hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { root.withWallpaper = !root.withWallpaper; root.saveConfig() } }
+                        }
+                        Segmented {
+                          visible: root.catalog.aether
+                          anchors.verticalCenter: parent.verticalCenter
+                          options: [{ id: "auto", label: "Auto" }, { id: "dark", label: "Dark" }, { id: "light", label: "Light" }]
+                          current: root.moodTone
+                          onPicked: function (id) { root.setMoodTone(id) }
+                        }
+                      }
+                    }
+
+                    Text {
+                      visible: root.aetherBlocker !== ""
+                      width: parent.width
+                      wrapMode: Text.WordWrap
+                      text: root.aetherBlocker
+                      color: root.text
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    SectionLabel { visible: root.catalog.aether; text: "Made from · W for the next wallpaper, X hides it" }
+
+                    // Wallpapers to draw moods from; the current one comes first.
+                    Flickable {
+                      visible: root.catalog.aether
+                      width: parent.width
+                      height: Style.space(60)
+                      contentWidth: sourceRow.implicitWidth
+                      contentHeight: height
+                      clip: true
+                      boundsBehavior: Flickable.StopAtBounds
+
+                      Row {
+                        id: sourceRow
+                        spacing: Style.space(8)
+
+                        Repeater {
+                          model: root.opened && root.tab === "moods" ? root.moodSources : []
+
+                          delegate: Rectangle {
+                            id: sourceTile
+                            required property var modelData
+                            readonly property bool chosen: modelData === root.activeMoodSource
+                            width: Style.space(104)
+                            height: Style.space(60)
+                            radius: Style.cornerRadius
+                            color: root.themeBackground
+                            border.width: Math.max(1, Style.space(chosen ? 2 : 1))
+                            border.color: chosen ? root.accent : sourceArea.containsMouse ? root.text : root.subtle
+                            clip: true
+                            opacity: root.hiddenSources.indexOf(modelData) >= 0 ? 0.35 : 1
+
+                            Image {
+                              anchors.fill: parent
+                              anchors.margins: parent.border.width
+                              source: Palette.fileUrl(sourceTile.modelData)
+                              sourceSize.width: Style.space(208)
+                              fillMode: Image.PreserveAspectCrop
+                              asynchronous: true
+                              cache: true
+                            }
+
+                            Rectangle {
+                              visible: sourceTile.modelData === root.catalog.wallpaper
+                              anchors.left: parent.left
+                              anchors.bottom: parent.bottom
+                              anchors.margins: Style.space(4)
+                              width: nowText.implicitWidth + Style.space(8)
+                              height: nowText.implicitHeight + Style.space(2)
+                              radius: height / 2
+                              color: Util.alpha(root.surface, 0.85)
+                              Text {
+                                id: nowText
+                                anchors.centerIn: parent
+                                text: "Current"
+                                color: root.text
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.caption
+                              }
+                            }
+
+                            MouseArea {
+                              id: sourceArea
+                              anchors.fill: parent
+                              hoverEnabled: true
+                              acceptedButtons: Qt.LeftButton | Qt.RightButton
+                              cursorShape: Qt.PointingHandCursor
+                              onEntered: root.hoverText = Palette.basename(sourceTile.modelData) + " · right-click to hide"
+                              onExited: root.hoverText = ""
+                              onClicked: function (mouse) {
+                                if (mouse.button === Qt.RightButton) {
+                                  if (root.hiddenSources.indexOf(sourceTile.modelData) >= 0) root.unhideSource(sourceTile.modelData)
+                                  else root.hideSource(sourceTile.modelData)
+                                } else root.pickSource(sourceTile.modelData)
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    Text {
+                      visible: root.catalog.aether && root.moods.length === 0
+                      text: root.moodsLoading ? "Mixing moods from " + Palette.basename(root.activeMoodSource) + "…"
+                        : "No moods for this wallpaper."
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    Flow {
+                      visible: root.moods.length > 0
+                      width: parent.width
+                      spacing: Style.space(8)
+                      Repeater {
+                        model: root.opened && root.tab === "moods" ? root.moods : []
+                        delegate: LookChip {
+                          required property var modelData
+                          look: modelData
+                          label: Palette.pretty(modelData.id)
+                          chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
+                          ring: root.accent
+                          fontFamily: root.fontFamily
+                          onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
+                          onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
+                          onPicked: root.applyLookTargets(modelData)
+                        }
+                      }
+                    }
+                  }
+
+                  // ---- Themes: every installed Omarchy theme ----
+                  Column {
+                    visible: root.tab === "themes"
+                    width: parent.width
+                    spacing: Style.space(10)
+                    Item {
+                      width: parent.width
+                      height: Math.max(themeCount.implicitHeight, themeWith.implicitHeight)
+                      Text {
+                        id: themeCount
+                        anchors.left: parent.left
+                        text: root.catalog.themes.length + " Omarchy themes, Aether's included"
+                        color: root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                      Text {
+                        id: themeWith
+                        anchors.right: parent.right
+                        visible: root.applyScope !== "text" && root.selectedTakesWallpaper
+                        text: (root.withWallpaper ? "󰄲" : "󰄱") + " Bring its wallpaper"
+                        color: themeWithArea.containsMouse ? root.text : root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        MouseArea { id: themeWithArea; anchors.fill: parent; anchors.margins: -Style.space(4); hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { root.withWallpaper = !root.withWallpaper; root.saveConfig() } }
+                      }
+                    }
+                    Flow {
+                      width: parent.width
+                      spacing: Style.space(8)
+                      Repeater {
+                        model: root.opened && root.tab === "themes" ? root.catalog.themes : []
+                        delegate: LookChip {
+                          required property var modelData
+                          look: modelData
+                          label: Palette.pretty(modelData.id)
+                          image: modelData.image || ""
+                          chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
+                          ring: root.accent
+                          fontFamily: root.fontFamily
+                          onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
+                          onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
+                          onPicked: root.applyLookTargets(modelData)
+                        }
+                      }
+                    }
+                  }
+
+                  // ---- Wallpaper: Ghostty only, one config file per window ----
+                  Column {
+                    visible: root.tab === "wallpapers"
+                    width: parent.width
+                    spacing: Style.space(12)
+
+                    Column {
+                      visible: root.wallpaperBlocker !== ""
+                      width: parent.width
+                      spacing: Style.space(8)
+                      Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: root.wallpaperBlocker
                         color: root.text
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.body
                       }
+                      TextButton {
+                        visible: root.catalog.ghostty && !root.catalog.launcher
+                        label: setupProc.running ? "Setting up…" : "Set up Ghostty for wallpapers"
+                        onActivated: root.runSetup()
+                      }
+                      Text {
+                        visible: root.setupMessage !== ""
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: root.setupMessage
+                        color: root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                    }
+
+                    Row {
+                      width: parent.width
+                      spacing: Style.space(12)
+
+                      Group {
+                        width: root.catalog.launcher ? (parent.width - Style.space(12)) / 2 : parent.width
+                        opacity: root.targetTakesWallpaper ? 1 : 0.45
+                        SectionLabel { text: "Image" }
+                        Row {
+                          spacing: Style.space(10)
+                          Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(64)
+                            text: "Strength"
+                            color: root.text
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.bodySmall
+                          }
+                          Segmented {
+                            options: Palette.STRENGTHS.map(function (s) { return { id: String(s.value), label: s.name } })
+                            current: String(root.selectedTerm && root.selectedTerm.wallpaper ? root.selectedTerm.wallpaper.strength : root.strength)
+                            onPicked: function (id) { root.setStrength(Number(id)) }
+                          }
+                        }
+                        Row {
+                          spacing: Style.space(10)
+                          Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(64)
+                            text: "Blur"
+                            color: root.text
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.bodySmall
+                          }
+                          PanelSlider {
+                            id: blurSlider
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(180)
+                            minimum: 0
+                            maximum: 40
+                            step: 1
+                            integer: true
+                            enabled: root.targetTakesWallpaper
+                            value: root.currentBlur
+                            fillColor: root.accent
+                            knobColor: root.accent
+                            onReleased: function (value) { root.setBlur(value) }
+                            Accessible.name: "Wallpaper blur"
+                          }
+                          Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(28)
+                            text: Math.round(blurSlider.liveValue) === 0 ? "Off" : String(Math.round(blurSlider.liveValue))
+                            color: root.text
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.bodySmall
+                          }
+                          TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Reset"; enabled: root.targetTakesWallpaper; onActivated: root.setBlur(0) }
+                        }
+                      }
+
+                      // Glass: frosted glass behind coloured blocks, in a colour of your choosing.
+                      Group {
+                        visible: root.catalog.launcher
+                        width: (parent.width - Style.space(12)) / 2
+                        Item {
+                          width: parent.width
+                          height: glassSwitch.height
+                          SectionLabel { anchors.verticalCenter: parent.verticalCenter; text: "Glass · G" }
+                          Segmented {
+                            id: glassSwitch
+                            anchors.right: parent.right
+                            options: [{ id: "on", label: "On" }, { id: "off", label: "Off" }]
+                            current: root.glass ? "on" : "off"
+                            onPicked: function (id) { root.setGlass(id === "on") }
+                          }
+                        }
+                        Text {
+                          width: parent.width
+                          wrapMode: Text.WordWrap
+                          text: "Claude’s message band and other coloured blocks become frosted glass over the wallpaper."
+                          color: root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                        Flow {
+                          visible: root.glass
+                          width: parent.width
+                          spacing: Style.space(8)
+                          TextButton {
+                            label: "Auto"
+                            chosen: root.glassColor === "auto"
+                            onActivated: root.setGlassColor("auto")
+                            HoverHandler { onHoveredChanged: root.hoverText = hovered ? "Auto: each terminal’s glass takes its own look’s colour" : "" }
+                          }
+                          Repeater {
+                            model: Palette.glassSwatches()
+                            delegate: Rectangle {
+                              required property var modelData
+                              width: root.swatchSize + Style.space(6)
+                              height: width
+                              radius: width / 2
+                              color: modelData.hex
+                              border.width: root.glassColor === modelData.hex ? Math.max(2, Style.space(2)) : Math.max(1, Style.space(1))
+                              border.color: root.glassColor === modelData.hex ? root.text : root.subtle
+                              MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onEntered: root.hoverText = modelData.name + " glass"
+                                onExited: root.hoverText = ""
+                                onClicked: root.setGlassColor(modelData.hex)
+                              }
+                            }
+                          }
+                          ColorField {
+                            value: root.glassColor === "auto" ? "" : root.glassColor
+                            onApplied: function (value) { root.setGlassColor(value) }
+                          }
+                        }
+                        Row {
+                          visible: root.glass
+                          spacing: Style.space(10)
+                          Text { anchors.verticalCenter: parent.verticalCenter; width: Style.space(36); text: "Tint"; color: root.text; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                          PanelSlider {
+                            id: glassTintSlider
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(140)
+                            minimum: 0
+                            maximum: 100
+                            step: 1
+                            integer: true
+                            value: root.glassTint
+                            fillColor: root.accent
+                            knobColor: root.accent
+                            onReleased: function (value) { root.setGlassTint(value) }
+                            Accessible.name: "Glass tint"
+                          }
+                          Text { anchors.verticalCenter: parent.verticalCenter; width: Style.space(36); text: Math.round(glassTintSlider.liveValue) + "%"; color: root.text; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                        }
+                        Row {
+                          visible: root.glass
+                          spacing: Style.space(10)
+                          Text { anchors.verticalCenter: parent.verticalCenter; width: Style.space(36); text: "Blur"; color: root.text; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                          PanelSlider {
+                            id: glassBlurSlider
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(140)
+                            minimum: 0
+                            maximum: 60
+                            step: 1
+                            integer: true
+                            value: root.glassBlur
+                            fillColor: root.accent
+                            knobColor: root.accent
+                            onReleased: function (value) { root.setGlassBlur(value) }
+                            Accessible.name: "Glass blur"
+                          }
+                          Text { anchors.verticalCenter: parent.verticalCenter; width: Style.space(36); text: Math.round(glassBlurSlider.liveValue) === 0 ? "Off" : String(Math.round(glassBlurSlider.liveValue)); color: root.text; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                          TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Reset"; onActivated: root.resetGlass() }
+                        }
+                      }
+                    }
+
+                    Text {
+                      visible: root.wallpaperMessage !== ""
+                      width: parent.width
+                      wrapMode: Text.WordWrap
+                      text: root.wallpaperMessage
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+
+                    Item {
+                      visible: !root.browsing
+                      width: parent.width
+                      height: Math.max(noneTile.height, addColumn.implicitHeight)
+                      WallTile { id: noneTile; path: ""; opacity: root.targetTakesWallpaper ? 1 : 0.4 }
+                      Column {
+                        id: addColumn
+                        anchors.left: noneTile.right
+                        anchors.leftMargin: Style.space(14)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(6)
+                        TextButton { label: "+  Add images or a folder…   A"; onActivated: root.openBrowser() }
+                        Text {
+                          text: "From anywhere on this computer. Click a section’s name to fold it; right-click an image to hide it."
+                          color: root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                      }
+                    }
+
+                    // Folder browser: any folder on this computer. Only PNG and JPEG
+                    // files are listed, the formats Ghostty can show; nothing is changed.
+                    Column {
+                      visible: root.browsing
+                      width: parent.width
+                      spacing: Style.space(8)
+
+                      Row {
+                        width: parent.width
+                        spacing: Style.space(8)
+                        TextButton { id: browseUpButton; label: "Up"; enabled: root.browseFolder !== "/"; onActivated: root.browseUp() }
+                        TextField {
+                          id: browsePath
+                          objectName: "ombreBrowsePath"
+                          width: parent.width - browseUpButton.width - Style.space(8)
+                          placeholderText: "Type or paste a folder or image path, then press Enter"
+                          onAccepted: { root.browseTo(text); keyCatcher.forceActiveFocus() }
+                          Keys.onEscapePressed: { text = Palette.tildePath(root.browseFolder, root.home); keyCatcher.forceActiveFocus() }
+                          Accessible.name: "Folder or image path"
+                        }
+                      }
+
+                      Flow {
+                        width: parent.width
+                        spacing: Style.space(6)
+                        Repeater {
+                          model: root.browsing ? root.browsePlaces : []
+                          delegate: TextButton {
+                            required property var modelData
+                            label: modelData.name
+                            chosen: root.browseFolder === modelData.path
+                            onActivated: root.browseTo(modelData.path)
+                          }
+                        }
+                      }
+
+                      Rectangle {
+                        width: parent.width
+                        height: Style.space(300)
+                        radius: Style.cornerRadius
+                        color: root.themeBackground
+                        border.width: Math.max(1, Style.space(1))
+                        border.color: root.subtle
+                        clip: true
+
+                        ListView {
+                          id: browseList
+                          anchors.fill: parent
+                          anchors.margins: Style.space(4)
+                          clip: true
+                          boundsBehavior: Flickable.StopAtBounds
+                          // No rows (and no thumbnails read) until the browser opens.
+                          model: root.browsing ? folderModel : null
+                          FolderListModel {
+                            id: folderModel
+                            folder: Palette.fileUrl(root.browseFolder || root.home || "/")
+                            nameFilters: ["*.png", "*.jpg", "*.jpeg"]
+                            caseSensitive: false
+                            showDirsFirst: true
+                            showDotAndDotDot: false
+                            showHidden: false
+                            showOnlyReadable: true
+                            sortCaseSensitive: false
+                            onFolderChanged: browseList.currentIndex = 0
+                          }
+
+                          delegate: Rectangle {
+                            id: browseRow
+                            required property int index
+                            required property string fileName
+                            required property string filePath
+                            required property bool fileIsDir
+                            width: ListView.view.width
+                            height: Style.space(44)
+                            radius: Style.cornerRadius
+                            color: ListView.isCurrentItem || rowArea.containsMouse ? Color.menu.selectedBackground : "transparent"
+
+                            MouseArea {
+                              id: rowArea
+                              anchors.fill: parent
+                              hoverEnabled: true
+                              cursorShape: Qt.PointingHandCursor
+                              onEntered: {
+                                browseList.currentIndex = browseRow.index
+                                root.hoverText = browseRow.fileIsDir ? "" : browseRow.fileName
+                                if (!browseRow.fileIsDir && root.selectedTakesWallpaper)
+                                  root.previewWallpaper(root.current, { path: browseRow.filePath, strength: root.strength, blur: root.currentBlur })
+                              }
+                              onExited: { root.hoverText = ""; previewEnd.restart() }
+                              onClicked: root.openBrowsed(browseRow.index)
+                            }
+
+                            Item {
+                              id: browseThumb
+                              anchors.left: parent.left
+                              anchors.leftMargin: Style.space(6)
+                              anchors.verticalCenter: parent.verticalCenter
+                              width: Style.space(64)
+                              height: Style.space(36)
+
+                              // A plain drawn folder, so no icon font is needed.
+                              Item {
+                                visible: browseRow.fileIsDir
+                                anchors.centerIn: parent
+                                width: Style.space(30)
+                                height: Style.space(22)
+                                Rectangle { x: 0; y: 0; width: parent.width * 0.45; height: parent.height * 0.3; radius: Style.space(2); color: root.muted }
+                                Rectangle { x: 0; y: parent.height * 0.18; width: parent.width; height: parent.height * 0.82; radius: Style.space(3); color: root.muted }
+                              }
+
+                              Image {
+                                visible: !browseRow.fileIsDir
+                                anchors.fill: parent
+                                source: browseRow.fileIsDir ? "" : Palette.fileUrl(browseRow.filePath)
+                                sourceSize.height: Style.space(72)
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                                cache: false
+                              }
+                            }
+
+                            Text {
+                              anchors.left: browseThumb.right
+                              anchors.leftMargin: Style.space(10)
+                              anchors.right: rowAdd.visible ? rowAdd.left : parent.right
+                              anchors.rightMargin: Style.space(8)
+                              anchors.verticalCenter: parent.verticalCenter
+                              text: browseRow.fileName
+                              elide: Text.ElideMiddle
+                              color: root.text
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.bodySmall
+                            }
+
+                            TextButton {
+                              id: rowAdd
+                              visible: browseRow.fileIsDir
+                              anchors.right: parent.right
+                              anchors.rightMargin: Style.space(6)
+                              anchors.verticalCenter: parent.verticalCenter
+                              label: "Add folder"
+                              onActivated: { root.addImageSource(browseRow.filePath); root.closeBrowser() }
+                            }
+                          }
+                        }
+
+                        Text {
+                          anchors.centerIn: parent
+                          visible: folderModel.status === FolderListModel.Ready && folderModel.count === 0
+                          text: "No folders or PNG/JPEG images here."
+                          color: root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                        }
+                      }
+
+                      Row {
+                        spacing: Style.space(8)
+                        TextButton {
+                          label: "Add this folder"
+                          enabled: root.browseFolder !== ""
+                          onActivated: { root.addImageSource(root.browseFolder); root.closeBrowser() }
+                        }
+                        TextButton { label: "Close"; onActivated: root.closeBrowser() }
+                      }
 
                       Text {
-                        id: lookLabel
-                        anchors.right: parent.right
-                        anchors.baseline: titleLabel.baseline
-                        width: Math.min(implicitWidth, parent.width * 0.5)
-                        text: {
-                          var parts = []
-                          if (tile.look && tile.look.kind !== "tint") parts.push(Palette.pretty(tile.look.id))
-                          if (tile.modelData.wallpaper) parts.push("\uDB80\uDEE9 " + Palette.basename(tile.modelData.wallpaper.path))
-                          return parts.join(" · ")
-                        }
-                        elide: Text.ElideMiddle
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Click an image to use it, or add a whole folder. Only PNG and JPEG files are listed: those are the formats Ghostty can show. Nothing is copied or changed. "
+                          + "Keys: ↑ ↓ move, Enter opens, Backspace goes up, A adds this folder, / types a path, Esc closes."
                         color: root.muted
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
                       }
                     }
 
-                    Row {
-                      spacing: Style.space(7)
+                    Column {
+                      id: wallSections
+                      visible: !root.browsing
+                      width: parent.width
+                      spacing: Style.space(12)
 
                       Repeater {
-                        model: Palette.HUES
-                        delegate: Swatch {
-                          required property var modelData
-                          value: modelData.id
-                          termIndex: tile.termIndex
-                          chosen: Palette.backgroundLook(tile.look) !== null && Palette.backgroundLook(tile.look).kind === "tint" && Palette.backgroundLook(tile.look).id === modelData.id
-                        }
-                      }
+                        model: root.opened && root.tab === "wallpapers" && !root.browsing ? root.wallpaperSections : []
 
-                      Swatch {
-                        value: ""
-                        termIndex: tile.termIndex
-                        chosen: Palette.backgroundLook(tile.look) === null
+                        delegate: Column {
+                          id: wallSection
+                          required property var modelData
+                          readonly property int indent: Style.space(18) * modelData.depth
+                          width: wallSections.width
+                          spacing: Style.space(6)
+
+                          Item {
+                            x: wallSection.indent
+                            width: parent.width - x
+                            height: Math.max(sectionText.implicitHeight, sectionRemove.visible ? sectionRemove.height : 0)
+
+                            Column {
+                              id: sectionText
+                              anchors.left: parent.left
+                              anchors.right: sectionRemove.visible ? sectionRemove.left : parent.right
+                              anchors.rightMargin: Style.space(8)
+                              anchors.verticalCenter: parent.verticalCenter
+                              spacing: Style.space(2)
+
+                              Row {
+                                spacing: Style.space(8)
+                                Text {
+                                  visible: !wallSection.modelData.empty
+                                  text: wallSection.modelData.collapsed ? "▸" : "▾"
+                                  color: sectionArea.containsMouse ? root.text : root.muted
+                                  font.family: root.fontFamily
+                                  font.pixelSize: Style.font.body
+                                }
+                                Text {
+                                  id: sectionTitle
+                                  text: wallSection.modelData.title
+                                  color: root.text
+                                  font.family: root.fontFamily
+                                  font.pixelSize: Style.font.body
+                                  font.bold: wallSection.modelData.depth === 0
+                                }
+                                Text {
+                                  anchors.baseline: sectionTitle.baseline
+                                  visible: !wallSection.modelData.empty
+                                  text: wallSection.modelData.count + (wallSection.modelData.count === 1 ? " image" : " images")
+                                  color: root.muted
+                                  font.family: root.fontFamily
+                                  font.pixelSize: Style.font.caption
+                                }
+                              }
+
+                              Text {
+                                visible: text !== ""
+                                width: parent.width
+                                elide: Text.ElideMiddle
+                                text: [wallSection.modelData.detail, wallSection.modelData.note].filter(function (t) { return t }).join(" · ")
+                                color: root.muted
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.caption
+                              }
+                            }
+
+                            MouseArea {
+                              id: sectionArea
+                              anchors.fill: sectionText
+                              hoverEnabled: true
+                              enabled: !wallSection.modelData.empty
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: root.toggleSection(wallSection.modelData.key)
+                            }
+
+                            TextButton {
+                              id: sectionRemove
+                              visible: wallSection.modelData.source !== ""
+                              anchors.right: parent.right
+                              anchors.verticalCenter: parent.verticalCenter
+                              label: "Remove"
+                              onActivated: root.removeImageSource(wallSection.modelData.source)
+                            }
+                          }
+
+                          Flow {
+                            visible: wallSection.modelData.images.length > 0
+                            x: wallSection.indent
+                            width: parent.width - x
+                            spacing: Style.space(8)
+                            opacity: root.targetTakesWallpaper ? 1 : 0.4
+
+                            Repeater {
+                              model: wallSection.modelData.images
+                              delegate: WallTile {
+                                required property var modelData
+                                path: modelData
+                                removable: wallSection.modelData.removableImages
+                              }
+                            }
+                          }
+                        }
                       }
                     }
                   }
@@ -2729,1211 +4321,450 @@ Item {
             }
           }
 
-          Rectangle { width: parent.width; height: Math.max(1, Style.space(1)); color: root.subtle }
+          // ======== Settings ========
+          Item {
+            id: settingsView
+            anchors.fill: parent
+            visible: root.view === "settings"
 
-          // Keep both layers visible while browsing presets or wallpapers.
-          Row {
-            visible: root.selectedTerm !== null
-            width: parent.width
-            spacing: Style.space(24)
-            Repeater {
-              model: ["text", "background"]
-              delegate: Column {
-                required property string modelData
-                width: (root.contentWidth - Style.space(24)) / 2
-                spacing: Style.space(6)
-                Row {
-                  spacing: Style.space(10)
+            Column {
+              id: settingsNav
+              anchors.left: parent.left
+              anchors.top: parent.top
+              width: body.sideWidth
+              spacing: Style.space(4)
+              Repeater {
+                model: root.settingsSections
+                delegate: Rectangle {
+                  id: navItem
+                  required property var modelData
+                  readonly property bool on: root.settingsSection === modelData.id
+                  width: settingsNav.width
+                  height: Style.space(42)
+                  radius: Style.cornerRadius
+                  color: on ? Color.menu.selectedBackground : navArea.containsMouse ? Util.alpha(root.text, 0.05) : "transparent"
+                  border.width: Math.max(1, Style.space(on ? 2 : 1))
+                  border.color: on ? root.accent : "transparent"
+                  Accessible.role: Accessible.PageTab
+                  Accessible.name: modelData.name
+                  Accessible.onPressAction: root.settingsSection = navItem.modelData.id
                   Text {
-                    text: modelData === "text" ? "Text colors" : "Background"
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(14)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: navItem.modelData.name
+                    color: navItem.on || navArea.containsMouse ? root.text : root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: navItem.on
+                  }
+                  MouseArea {
+                    id: navArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: { root.settingsSection = navItem.modelData.id; keyCatcher.forceActiveFocus() }
+                  }
+                }
+              }
+            }
+
+            Rectangle {
+              id: settingsRule
+              anchors.left: settingsNav.right
+              anchors.leftMargin: Style.space(16)
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: Math.max(1, Style.space(1))
+              color: root.subtle
+            }
+
+            Flickable {
+              id: settingsPane
+              anchors.left: settingsRule.right
+              anchors.leftMargin: Style.space(20)
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              contentWidth: width
+              contentHeight: settingsContent.implicitHeight
+              clip: true
+              interactive: contentHeight > height
+              boundsBehavior: Flickable.StopAtBounds
+
+              Column {
+                id: settingsContent
+                width: Math.min(settingsPane.width, Style.space(760))
+                spacing: Style.space(14)
+
+                // Window effects: switches that apply to every terminal.
+                Column {
+                  visible: root.settingsSection === "windows"
+                  width: parent.width
+                  spacing: Style.space(12)
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "These apply to every terminal. Each has a key you can press anywhere in Ombre."
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  Rectangle {
+                    width: parent.width
+                    height: effectRows.implicitHeight
+                    radius: Style.cornerRadius
+                    color: Util.alpha(root.text, 0.02)
+                    border.width: Math.max(1, Style.space(1))
+                    border.color: root.subtle
+                    clip: true
+                    Column {
+                      id: effectRows
+                      width: parent.width
+                      SettingRow {
+                        name: "Matching borders"
+                        detail: "The window border takes the look’s colour: bright when focused, dim otherwise."
+                        key: "B"
+                        checked: root.borders
+                        onToggled: root.setBorders(!root.borders)
+                      }
+                      SettingRow {
+                        name: "Pulse when an agent is done"
+                        detail: "The border breathes in its colour until you click into the window. Works with agents that show a spinner in the title and with the terminal bell."
+                        key: "P"
+                        checked: root.pulse
+                        onToggled: root.setPulse(!root.pulse)
+                      }
+                      SettingRow {
+                        visible: root.catalog.ghostty
+                        name: "Solid Ghostty windows"
+                        detail: "Turn off Omarchy’s window transparency so the desktop doesn’t show through a terminal’s wallpaper."
+                        key: "O"
+                        checked: root.solid
+                        onToggled: root.setSolid(!root.solid)
+                      }
+                      SettingRow {
+                        visible: root.catalog.launcher
+                        name: "Text shadow (Ghostty)"
+                        detail: "A soft shadow under the text so it reads over any wallpaper."
+                        key: "T"
+                        checked: root.textShadow
+                        onToggled: root.setTextShadow(!root.textShadow)
+                      }
+                      SettingRow {
+                        visible: root.catalog.launcher
+                        name: "Glass (Ghostty)"
+                        detail: "Coloured blocks become frosted glass over the wallpaper. Its colour, tint and blur are in the Wallpaper tab."
+                        key: "G"
+                        checked: root.glass
+                        onToggled: root.setGlass(!root.glass)
+                      }
+                    }
+                  }
+                  Column {
+                    visible: root.catalog.ghostty && !root.catalog.launcher
+                    width: parent.width
+                    spacing: Style.space(8)
+                    Text {
+                      width: parent.width
+                      wrapMode: Text.WordWrap
+                      text: "Wallpapers, text shadow and glass need Ghostty windows opened through Ombre. It takes one click."
+                      color: root.text
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    TextButton { label: setupProc.running ? "Setting up…" : "Set up Ghostty for wallpapers"; onActivated: root.runSetup() }
+                  }
+                }
+
+                // Claude Code and Codex follow each terminal's colours.
+                Column {
+                  visible: root.settingsSection === "agents"
+                  width: parent.width
+                  spacing: Style.space(12)
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Let Claude Code and Codex draw their interface in each terminal’s own colours. Link once, then pick “Ombre” in each app’s /theme menu."
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  Group {
+                    width: parent.width
+                    Item {
+                      width: parent.width
+                      height: Math.max(agentText.implicitHeight, agentButtons.height)
+                      Column {
+                        id: agentText
+                        anchors.left: parent.left
+                        anchors.right: agentButtons.left
+                        anchors.rightMargin: Style.space(12)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(4)
+                        Text {
+                          text: "Claude Code + Codex app themes"
+                          color: root.text
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                        }
+                        Text {
+                          width: parent.width
+                          wrapMode: Text.WordWrap
+                          text: root.agentThemeMessage || (root.agentThemeStatus.linked ? "Linked. Each terminal follows its own palette." : "Not linked yet.")
+                          color: root.muted
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                        }
+                      }
+                      Row {
+                        id: agentButtons
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(8)
+                        TextButton {
+                          label: agentThemeProc.running ? "Checking…" : root.agentThemeStatus.linked ? "Linked to Ombre" : "Link app themes"
+                          chosen: root.agentThemeStatus.linked
+                          onActivated: root.setAgentThemes(true)
+                        }
+                        TextButton {
+                          visible: root.agentThemeStatus.canUnlink
+                          label: "Unlink"
+                          onActivated: root.setAgentThemes(false)
+                        }
+                      }
+                    }
+                  }
+                }
+
+                // What newly opened terminals get.
+                Column {
+                  visible: root.settingsSection === "new"
+                  width: parent.width
+                  spacing: Style.space(12)
+                  Text {
+                    text: "When a new terminal opens, give it:"
                     color: root.text
-                    font.bold: true
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
                   }
+                  Segmented {
+                    options: [{ id: "none", label: "Its own colours" }, { id: "auto", label: "A different tint each" }, { id: "look", label: "A saved look" }]
+                    current: root.newDefault.mode
+                    onPicked: function (id) { root.setDefaultMode(id) }
+                  }
                   Text {
-                    text: !root.selectedTerm ? "" : modelData === "text"
-                      ? Palette.textLabel(root.selectedTerm.look) : Palette.backgroundLabel(root.selectedTerm.look)
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: root.newDefault.mode === "auto"
+                      ? "Each new terminal gets the tint the fewest open terminals have, so new agents never look alike."
+                      : root.newDefault.mode === "look"
+                        ? "New terminals open as " + root.defaultLabel + "."
+                        : "New terminals keep their usual colours."
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
-                    width: Style.space(150)
-                    elide: Text.ElideRight
+                  }
+                  Row {
+                    spacing: Style.space(10)
+                    TextButton {
+                      label: root.selectedTerm ? "Use the look of “" + root.selectedTerm.title.slice(0, 40) + "”" : "Use the selected terminal’s look"
+                      opacity: root.selectedTerm && (root.selectedTerm.look || root.selectedTerm.wallpaper) ? 1 : 0.4
+                      onActivated: if (root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
+                    }
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "or press D while styling"
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
                   }
                 }
-                Row {
-                  spacing: Style.space(8)
-                  ColorField {
-                    value: !root.selectedTerm ? "" : modelData === "text"
-                      ? Palette.lookForeground(root.selectedTerm.look) : Palette.lookBackground(root.selectedTerm.look, root.themeBackground)
-                    onApplied: function(value) { root.setLayerColor(modelData, value) }
-                  }
-                  TextButton {
-                    label: "Choose palette"
-                    chosen: root.applyScope === modelData
-                    onActivated: { root.endPreview(); root.applyScope = modelData; root.tab = "moods" }
-                  }
-                  TextButton { label: "Reset"; onActivated: root.resetLayer(modelData) }
-                }
-                Row {
-                  visible: modelData === "text"
-                  spacing: Style.space(8)
+
+                // Project rules: a folder's terminals get its look.
+                Column {
+                  visible: root.settingsSection === "projects"
+                  width: parent.width
+                  spacing: Style.space(12)
                   Text {
-                    text: "Text tint"
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "A terminal working inside one of these folders gets that folder’s look automatically. "
+                      + (root.selectedTerm && (root.selectedTerm.root || root.selectedTerm.cwd)
+                        ? "The selected terminal is in " + Palette.tildePath(root.selectedTerm.root || root.selectedTerm.cwd, root.home) + "." : "")
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
-                    anchors.verticalCenter: parent.verticalCenter
                   }
-                  Repeater {
-                    model: Palette.HUES
-                    delegate: Rectangle {
-                      required property var modelData
-                      readonly property string textColor: Palette.mix(modelData.hex,
-                        Palette.isLight(root.selectedTerm ? (Palette.lookBackground(root.selectedTerm.look, root.themeBackground) || root.themeBackground) : root.themeBackground)
-                          ? "#000000" : "#ffffff", 0.35)
-                      width: root.swatchSize
-                      height: width
-                      radius: width / 2
-                      color: textColor
-                      border.width: root.selectedTerm && Palette.lookForeground(root.selectedTerm.look) === textColor ? 2 : 0
-                      border.color: root.text
-                      MouseArea {
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onEntered: root.hoverText = modelData.name + " text · keeps your background and syntax palette"
-                        onExited: root.hoverText = ""
-                        onClicked: root.setLayerColor("text", textColor)
-                      }
-                    }
+                  Text {
+                    visible: root.projects.length === 0
+                    text: "No project folders yet."
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
                   }
-                }
-              }
-            }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(5)
-            Row {
-              spacing: Style.space(10)
-              Text {
-                text: "Claude + Codex"
-                color: root.text
-                font.bold: true
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                anchors.verticalCenter: parent.verticalCenter
-              }
-              TextButton {
-                label: agentThemeProc.running ? "Checking…" : root.agentThemeStatus.linked ? "Linked to Ombre" : "Link app themes"
-                chosen: root.agentThemeStatus.linked
-                onActivated: root.setAgentThemes(true)
-              }
-              TextButton {
-                visible: root.agentThemeStatus.canUnlink
-                label: "Unlink"
-                onActivated: root.setAgentThemes(false)
-              }
-            }
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: root.agentThemeMessage || "Each window keeps its own mood. Select Ombre once in each app’s /theme picker."
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-          }
-
-          Flickable {
-            visible: root.favoriteLooks.length > 0
-            width: parent.width
-            height: favoriteRow.implicitHeight
-            contentWidth: favoriteRow.implicitWidth
-            contentHeight: height
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            Row {
-              id: favoriteRow
-              spacing: Style.space(8)
-              Repeater {
-                model: root.favoriteLooks
-                delegate: TextButton {
-                  required property var modelData
-                  label: "★ " + modelData.name
-                  onActivated: root.applySavedTargets(modelData)
-                }
-              }
-            }
-          }
-
-          Row {
-            visible: root.tab === "saved" || root.tab === "moods" || root.tab === "themes"
-            spacing: Style.space(8)
-            Text {
-              text: "Layers"
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              anchors.verticalCenter: parent.verticalCenter
-            }
-            Repeater {
-              model: [{id: "all", label: "Complete preset"}, {id: "text", label: "Text colors"}, {id: "background", label: "Background"}]
-              delegate: TextButton {
-                required property var modelData
-                label: modelData.label
-                chosen: root.applyScope === modelData.id
-                onActivated: { root.endPreview(); root.applyScope = modelData.id }
-              }
-            }
-          }
-
-          // Moods, themes and wallpapers apply to the selected terminal.
-          Item {
-            width: parent.width
-            height: Math.max(tabRow.implicitHeight, appliesText.implicitHeight) + Style.space(5)
-
-            Row {
-              id: tabRow
-              spacing: Style.space(18)
-              Repeater {
-                model: root.tabs
-                delegate: TabButton {
-                  required property var modelData
-                  name: modelData
-                  text: modelData === "default" ? "Projects & new terminals" : modelData === "saved" ? "Saved looks" : Palette.pretty(modelData)
-                }
-              }
-            }
-
-            Row {
-              anchors.right: parent.right
-              spacing: Style.space(14)
-
-              Text {
-                visible: root.hiddenCount > 0 && (root.tab === "moods" || root.tab === "wallpapers")
-                text: (root.showHidden ? "Hide hidden (" : "Show hidden (") + root.hiddenCount + ")"
-                color: hiddenArea.containsMouse ? root.text : root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                MouseArea {
-                  id: hiddenArea
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.showHidden = !root.showHidden
-                }
-              }
-
-              Text {
-                visible: root.applyScope !== "text" && (root.tab === "moods" || root.tab === "themes") && root.selectedTakesWallpaper
-                text: (root.withWallpaper ? "\uDB80\uDD32" : "\uDB80\uDD31") + " with its wallpaper"
-                color: withArea.containsMouse ? root.text : root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-
-                MouseArea {
-                  id: withArea
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: { root.withWallpaper = !root.withWallpaper; root.saveConfig() }
-                }
-              }
-
-              Text {
-                id: appliesText
-                width: Math.min(implicitWidth, root.contentWidth * 0.45)
-                text: !root.selectedTerm ? ""
-                : root.markedKeys.length ? "for " + root.actionTargets.length + " selected terminals"
-                : "for " + root.selectedTerm.title + (root.selectedTerm.visible ? ""
-                  : " · on workspace " + root.selectedTerm.workspace + ", not on screen")
-                elide: Text.ElideRight
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-          }
-
-          Column {
-            visible: root.tab === "saved"
-            width: parent.width
-            spacing: Style.space(10)
-            Row {
-              spacing: Style.space(8)
-              TextField {
-                id: savedName
-                objectName: "ombreSavedName"
-                width: Style.space(260)
-                maximumLength: 64
-                placeholderText: root.editingSavedName ? "New name for " + root.editingSavedName : "Name the active terminal’s look…"
-                onAccepted: root.submitSavedName(text)
-                Keys.onEscapePressed: { root.editingSavedName = ""; text = ""; keyCatcher.forceActiveFocus() }
-                Accessible.name: "Saved look name"
-              }
-              TextButton { label: root.editingSavedName ? "Rename" : "Save active look"; enabled: root.editingSavedName !== "" || root.selectedTerm !== null; onActivated: root.submitSavedName(savedName.text) }
-              TextButton { visible: root.editingSavedName !== ""; label: "Cancel rename"; onActivated: { root.editingSavedName = ""; savedName.text = "" } }
-              TextButton { label: "Favourites only"; chosen: root.favoritesOnly; onActivated: root.favoritesOnly = !root.favoritesOnly }
-            }
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: root.libraryMessage || "Save the active terminal’s exact colours, wallpaper, strength and blur. Click a saved look to apply it to the selected targets."
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-            Text {
-              visible: root.sortedLooks.length === 0
-              text: root.savedLooks.length ? "No favourites yet. Star a saved look to keep it close." : "No saved looks yet. Give a terminal a look, then save it above."
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-            Flickable {
-              width: parent.width
-              height: Math.min(savedColumn.implicitHeight, Style.space(240))
-              contentWidth: width
-              contentHeight: savedColumn.implicitHeight
-              clip: true
-              boundsBehavior: Flickable.StopAtBounds
-              Column {
-                id: savedColumn
-                spacing: Style.space(8)
-                Repeater {
-                  model: root.opened && root.tab === "saved" ? root.sortedLooks : []
-                  delegate: Row {
-                    id: savedRow
-                    required property var modelData
-                    spacing: Style.space(8)
-                    LookChip {
-                      width: Style.space(240)
-                      label: savedRow.modelData.name
-                      look: root.savedChipLook(savedRow.modelData)
-                      image: savedRow.modelData.wallpaper ? savedRow.modelData.wallpaper.path : ""
-                      chosen: root.selectedTerm !== null && Workspace.same(root.selectedTerm, savedRow.modelData)
-                      onHoverStarted: {
-                        root.preview(root.current, savedRow.modelData.look, root.applyScope)
-                        if (root.applyScope !== "text" && root.selectedTakesWallpaper) root.previewWallpaper(root.current, savedRow.modelData.wallpaper)
-                      }
-                      onHoverEnded: previewEnd.restart()
-                      onPicked: root.applySavedTargets(savedRow.modelData)
-                    }
-                    TextButton {
-                      anchors.verticalCenter: parent.verticalCenter
-                      label: savedRow.modelData.favorite ? "★" : "☆"
-                      chosen: savedRow.modelData.favorite
-                      Accessible.name: (savedRow.modelData.favorite ? "Unstar " : "Star ") + savedRow.modelData.name
-                      onActivated: root.favoriteNamedLook(savedRow.modelData.name)
-                    }
-                    TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Update"; enabled: root.selectedTerm !== null; onActivated: root.saveNamedLook(savedRow.modelData.name, root.selectedTerm, true) }
-                    TextButton { anchors.verticalCenter: parent.verticalCenter; label: "Rename"; onActivated: { root.editingSavedName = savedRow.modelData.name; savedName.text = savedRow.modelData.name; savedName.forceActiveFocus(); savedName.selectAll() } }
-                    TextButton {
-                      anchors.verticalCenter: parent.verticalCenter
-                      label: root.pendingDeleteName === savedRow.modelData.name ? "Confirm delete" : "Delete"
-                      onActivated: {
-                        if (root.pendingDeleteName === savedRow.modelData.name) root.removeNamedLook(savedRow.modelData.name)
-                        else { root.pendingDeleteName = savedRow.modelData.name; root.libraryMessage = "Click Confirm delete to remove " + savedRow.modelData.name + "." }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          Column {
-            visible: root.tab === "moods"
-            width: parent.width
-            spacing: Style.space(10)
-
-            Text {
-              visible: root.aetherBlocker !== ""
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: root.aetherBlocker
-              color: root.text
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Text {
-              visible: root.catalog.aether
-              text: root.catalog.modes.length + " Aether styles · moods, pastel, muted, color harmonies and more"
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            // Wallpapers to draw moods from; the current one comes first.
-            Flickable {
-              visible: root.catalog.aether
-              width: parent.width
-              height: Style.space(54)
-              contentWidth: sourceRow.implicitWidth
-              contentHeight: height
-              clip: true
-              boundsBehavior: Flickable.StopAtBounds
-
-              Row {
-                id: sourceRow
-                spacing: Style.space(8)
-
-                Repeater {
-                  model: root.opened && root.tab === "moods" ? root.moodSources : []
-
-                  delegate: Rectangle {
-                    id: sourceTile
-                    required property var modelData
-                    readonly property bool chosen: modelData === root.activeMoodSource
-                    width: Style.space(96)
-                    height: Style.space(54)
+                  Rectangle {
+                    visible: root.projects.length > 0
+                    width: parent.width
+                    height: ruleRows.implicitHeight
                     radius: Style.cornerRadius
-                    color: root.themeBackground
-                    border.width: Math.max(1, Style.space(chosen ? 2 : 1))
-                    border.color: chosen ? root.accent : sourceArea.containsMouse ? root.text : root.subtle
+                    color: Util.alpha(root.text, 0.02)
+                    border.width: Math.max(1, Style.space(1))
+                    border.color: root.subtle
                     clip: true
-
-                    Image {
-                      anchors.fill: parent
-                      anchors.margins: parent.border.width
-                      source: Palette.fileUrl(sourceTile.modelData)
-                      sourceSize.width: Style.space(192)
-                      fillMode: Image.PreserveAspectCrop
-                      asynchronous: true
-                      cache: true
+                    Column {
+                      id: ruleRows
+                      width: parent.width
+                      Repeater {
+                        model: root.opened && root.view === "settings" ? root.projects : []
+                        delegate: Item {
+                          id: ruleRow
+                          required property var modelData
+                          readonly property string accentHex: Palette.lookAccent(modelData.look) || root.accentHex
+                          width: ruleRows.width
+                          height: Style.space(56)
+                          Rectangle {
+                            id: ruleSwatch
+                            anchors.left: parent.left
+                            anchors.leftMargin: Style.space(14)
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(30)
+                            height: Style.space(20)
+                            radius: Style.space(3)
+                            color: Palette.lookBackground(ruleRow.modelData.look, root.themeBackground) || root.themeBackground
+                            border.width: Math.max(1, Style.space(2))
+                            border.color: ruleRow.accentHex
+                          }
+                          Column {
+                            anchors.left: ruleSwatch.right
+                            anchors.leftMargin: Style.space(12)
+                            anchors.right: ruleRemove.left
+                            anchors.rightMargin: Style.space(12)
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Style.space(2)
+                            Text {
+                              width: parent.width
+                              elide: Text.ElideMiddle
+                              text: Palette.tildePath(ruleRow.modelData.path, root.home)
+                              color: root.text
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.body
+                            }
+                            Text {
+                              width: parent.width
+                              elide: Text.ElideRight
+                              text: root.ruleLabel(ruleRow.modelData)
+                              color: root.muted
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.caption
+                            }
+                          }
+                          TextButton {
+                            id: ruleRemove
+                            anchors.right: parent.right
+                            anchors.rightMargin: Style.space(14)
+                            anchors.verticalCenter: parent.verticalCenter
+                            label: "Remove"
+                            Accessible.name: "Remove " + ruleRow.modelData.path
+                            onActivated: root.removeProject(ruleRow.modelData.path)
+                          }
+                          Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: Math.max(1, Style.space(1))
+                            color: root.subtle
+                          }
+                        }
+                      }
                     }
+                  }
+                  Row {
+                    spacing: Style.space(10)
+                    TextButton {
+                      label: root.selectedTerm && (root.selectedTerm.root || root.selectedTerm.cwd)
+                        ? "Use this look for " + Palette.basename(root.selectedTerm.root || root.selectedTerm.cwd) : "Use this look for its folder"
+                      opacity: root.selectedTerm && (root.selectedTerm.look || root.selectedTerm.wallpaper) && (root.selectedTerm.root || root.selectedTerm.cwd) ? 1 : 0.4
+                      onActivated: root.saveProjectFrom(root.selectedTerm)
+                    }
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "or press F while styling"
+                      color: root.muted
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
 
-                    Rectangle {
-                      visible: sourceTile.modelData === root.catalog.wallpaper
-                      anchors.left: parent.left
-                      anchors.bottom: parent.bottom
-                      anchors.margins: Style.space(4)
-                      width: nowText.implicitWidth + Style.space(8)
-                      height: nowText.implicitHeight + Style.space(2)
-                      radius: height / 2
-                      color: Util.alpha(root.surface, 0.85)
-
+                // About: version, maker and what's installed.
+                Column {
+                  visible: root.settingsSection === "about"
+                  width: parent.width
+                  spacing: Style.space(14)
+                  Row {
+                    spacing: Style.space(16)
+                    Image {
+                      anchors.verticalCenter: parent.verticalCenter
+                      source: Qt.resolvedUrl("assets/brand/ombre-mark.svg")
+                      width: Style.space(72)
+                      height: width
+                      sourceSize: Qt.size(width * 2, height * 2)
+                      Accessible.ignored: true
+                    }
+                    Column {
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(4)
                       Text {
-                        id: nowText
-                        anchors.centerIn: parent
-                        text: "Current"
+                        text: "Ombre " + (root.pluginVersion || "")
                         color: root.text
                         font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
+                        font.pixelSize: Style.font.display
+                        font.bold: true
                       }
-                    }
-
-                    opacity: root.hiddenSources.indexOf(modelData) >= 0 ? 0.35 : 1
-
-                    MouseArea {
-                      id: sourceArea
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      acceptedButtons: Qt.LeftButton | Qt.RightButton
-                      cursorShape: Qt.PointingHandCursor
-                      onEntered: root.hoverText = Palette.basename(sourceTile.modelData) + " · right-click to hide"
-                      onExited: root.hoverText = ""
-                      onClicked: function (mouse) {
-                        if (mouse.button === Qt.RightButton) {
-                          if (root.hiddenSources.indexOf(sourceTile.modelData) >= 0) root.unhideSource(sourceTile.modelData)
-                          else root.hideSource(sourceTile.modelData)
-                        } else root.pickSource(sourceTile.modelData)
+                      Text {
+                        text: "Every terminal, its own look. From ekkOStech."
+                        color: root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
                       }
                     }
                   }
-                }
-              }
-            }
-
-            Text {
-              visible: root.catalog.aether && root.moods.length === 0
-              text: root.moodsLoading ? "Mixing moods from " + Palette.basename(root.activeMoodSource) + "…"
-                : "No moods for this wallpaper."
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Flickable {
-              visible: root.moods.length > 0
-              width: parent.width
-              height: Math.min(moodFlow.implicitHeight, Style.space(220))
-              contentWidth: width
-              contentHeight: moodFlow.implicitHeight
-              clip: true
-              interactive: contentHeight > height
-              boundsBehavior: Flickable.StopAtBounds
-
-              Flow {
-                id: moodFlow
-                width: parent.width
-                spacing: Style.space(8)
-
-                Repeater {
-                  model: root.opened && root.tab === "moods" ? root.moods : []
-                  delegate: LookChip {
-                    required property var modelData
-                    look: modelData
-                    label: Palette.pretty(modelData.id)
-                    chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
-                    ring: root.accent
-                    fontFamily: root.fontFamily
-                    onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
-                    onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
-                    onPicked: root.applyLookTargets(modelData)
-                  }
-                }
-              }
-            }
-          }
-
-          Flickable {
-            visible: root.tab === "themes"
-            width: parent.width
-            height: Math.min(themeFlow.implicitHeight, Style.space(260))
-            contentWidth: width
-            contentHeight: themeFlow.implicitHeight
-            clip: true
-            interactive: contentHeight > height
-            boundsBehavior: Flickable.StopAtBounds
-
-            Flow {
-              id: themeFlow
-              width: parent.width
-              spacing: Style.space(8)
-
-              Repeater {
-                model: root.opened && root.tab === "themes" ? root.catalog.themes : []
-                delegate: LookChip {
-                  required property var modelData
-                  look: modelData
-                  label: Palette.pretty(modelData.id)
-                  image: modelData.image || ""
-                  chosen: root.selectedTerm !== null && Palette.sameLook(modelData, root.scopeLook(root.selectedTerm.look))
-                  ring: root.accent
-                  fontFamily: root.fontFamily
-                  onHoverStarted: { root.hoverText = root.describe(modelData); root.preview(root.current, modelData) }
-                  onHoverEnded: { root.hoverText = ""; previewEnd.restart() }
-                  onPicked: root.applyLookTargets(modelData)
-                }
-              }
-            }
-          }
-
-          // Wallpapers: Ghostty only, one config file per window.
-          Column {
-            visible: root.tab === "wallpapers"
-            width: parent.width
-            spacing: Style.space(10)
-
-            Column {
-              visible: root.wallpaperBlocker !== ""
-              width: parent.width
-              spacing: Style.space(8)
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: root.wallpaperBlocker
-                color: root.text
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              TextButton {
-                visible: root.catalog.ghostty && !root.catalog.launcher
-                label: setupProc.running ? "Setting up…" : "Set up Ghostty for wallpapers"
-                onActivated: root.runSetup()
-              }
-
-              Text {
-                visible: root.setupMessage !== ""
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: root.setupMessage
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-
-            Row {
-              spacing: Style.space(8)
-              opacity: root.targetTakesWallpaper ? 1 : 0.4
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Strength"
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-
-              Repeater {
-                model: Palette.STRENGTHS
-                delegate: TextButton {
-                  required property var modelData
-                  label: modelData.name
-                  chosen: (root.selectedTerm && root.selectedTerm.wallpaper ? root.selectedTerm.wallpaper.strength : root.strength) === modelData.value
-                  onActivated: root.setStrength(modelData.value)
-                }
-              }
-            }
-
-            Row {
-              spacing: Style.space(10)
-              opacity: root.targetTakesWallpaper ? 1 : 0.4
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Blur"
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-              PanelSlider {
-                id: blurSlider
-                width: Style.space(220)
-                minimum: 0
-                maximum: 40
-                step: 1
-                integer: true
-                enabled: root.targetTakesWallpaper
-                value: root.currentBlur
-                fillColor: root.accent
-                knobColor: root.accent
-                onReleased: function(value) { root.setBlur(value) }
-                Accessible.name: "Wallpaper blur"
-              }
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: Math.round(blurSlider.liveValue) === 0 ? "Off" : String(Math.round(blurSlider.liveValue))
-                color: root.text
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-              TextButton { label: "Reset blur"; enabled: root.targetTakesWallpaper; onActivated: root.setBlur(0) }
-            }
-
-            // Glass: frosted glass behind coloured blocks, in a colour of your choosing.
-            Column {
-              visible: root.catalog.launcher
-              width: parent.width
-              spacing: Style.space(8)
-
-              Row {
-                spacing: Style.space(10)
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Glass"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-                TextButton { label: root.glass ? "On" : "Off"; chosen: root.glass; onActivated: root.setGlass(!root.glass) }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Frosted glass behind Claude’s message band and other coloured blocks, over the wallpaper. G toggles it."
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-
-              Row {
-                visible: root.glass
-                spacing: Style.space(8)
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Colour"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-                TextButton {
-                  label: "Auto"
-                  chosen: root.glassColor === "auto"
-                  onActivated: root.setGlassColor("auto")
-                  HoverHandler { onHoveredChanged: root.hoverText = hovered ? "Auto: each terminal’s glass takes its own look’s colour" : "" }
-                }
-                Repeater {
-                  model: Palette.glassSwatches()
-                  delegate: Rectangle {
-                    required property var modelData
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: root.swatchSize
-                    height: width
-                    radius: width / 2
-                    color: modelData.hex
-                    border.width: root.glassColor === modelData.hex ? Math.max(2, Style.space(2)) : Math.max(1, Style.space(1))
-                    border.color: root.glassColor === modelData.hex ? root.text : root.subtle
-                    MouseArea {
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onEntered: root.hoverText = modelData.name + " glass"
-                      onExited: root.hoverText = ""
-                      onClicked: root.setGlassColor(modelData.hex)
-                    }
-                  }
-                }
-                ColorField {
-                  anchors.verticalCenter: parent.verticalCenter
-                  value: root.glassColor === "auto" ? "" : root.glassColor
-                  onApplied: function(value) { root.setGlassColor(value) }
-                }
-              }
-
-              Row {
-                visible: root.glass
-                spacing: Style.space(10)
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Tint"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-                PanelSlider {
-                  id: glassTintSlider
-                  width: Style.space(160)
-                  minimum: 0
-                  maximum: 100
-                  step: 1
-                  integer: true
-                  value: root.glassTint
-                  fillColor: root.accent
-                  knobColor: root.accent
-                  onReleased: function(value) { root.setGlassTint(value) }
-                  Accessible.name: "Glass tint"
-                }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: Math.round(glassTintSlider.liveValue) + "%"
-                  color: root.text
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Blur"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-                PanelSlider {
-                  id: glassBlurSlider
-                  width: Style.space(160)
-                  minimum: 0
-                  maximum: 60
-                  step: 1
-                  integer: true
-                  value: root.glassBlur
-                  fillColor: root.accent
-                  knobColor: root.accent
-                  onReleased: function(value) { root.setGlassBlur(value) }
-                  Accessible.name: "Glass blur"
-                }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: Math.round(glassBlurSlider.liveValue) === 0 ? "Off" : String(Math.round(glassBlurSlider.liveValue))
-                  color: root.text
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-                TextButton { label: "Reset glass"; onActivated: root.resetGlass() }
-              }
-            }
-            Text {
-              visible: root.wallpaperMessage !== ""
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: root.wallpaperMessage
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Row {
-              visible: !root.browsing
-              spacing: Style.space(12)
-              WallTile { path: ""; opacity: root.targetTakesWallpaper ? 1 : 0.4 }
-              Column {
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(6)
-                TextButton { label: "Add images or a folder…"; onActivated: root.openBrowser() }
-                Text {
-                  text: "From anywhere on this computer, or press A. Click a section’s name to fold it."
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-            }
-
-            // Folder browser: any folder on this computer. Only PNG and JPEG
-            // files are listed, the formats Ghostty can show; nothing is changed.
-            Column {
-              visible: root.browsing
-              width: parent.width
-              spacing: Style.space(8)
-
-              Row {
-                width: parent.width
-                spacing: Style.space(8)
-                TextButton { id: browseUpButton; label: "Up"; enabled: root.browseFolder !== "/"; onActivated: root.browseUp() }
-                TextField {
-                  id: browsePath
-                  objectName: "ombreBrowsePath"
-                  width: parent.width - browseUpButton.width - Style.space(8)
-                  placeholderText: "Type or paste a folder or image path, then press Enter"
-                  onAccepted: { root.browseTo(text); keyCatcher.forceActiveFocus() }
-                  Keys.onEscapePressed: { text = Palette.tildePath(root.browseFolder, root.home); keyCatcher.forceActiveFocus() }
-                  Accessible.name: "Folder or image path"
-                }
-              }
-
-              Flow {
-                width: parent.width
-                spacing: Style.space(6)
-                Repeater {
-                  model: root.browsing ? root.browsePlaces : []
-                  delegate: TextButton {
-                    required property var modelData
-                    label: modelData.name
-                    chosen: root.browseFolder === modelData.path
-                    onActivated: root.browseTo(modelData.path)
-                  }
-                }
-              }
-
-              Rectangle {
-                width: parent.width
-                height: Style.space(260)
-                radius: Style.cornerRadius
-                color: root.themeBackground
-                border.width: Math.max(1, Style.space(1))
-                border.color: root.subtle
-                clip: true
-
-                ListView {
-                  id: browseList
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  clip: true
-                  boundsBehavior: Flickable.StopAtBounds
-                  // No rows (and no thumbnails read) until the browser opens.
-                  model: root.browsing ? folderModel : null
-                  FolderListModel {
-                    id: folderModel
-                    folder: Palette.fileUrl(root.browseFolder || root.home || "/")
-                    nameFilters: ["*.png", "*.jpg", "*.jpeg"]
-                    caseSensitive: false
-                    showDirsFirst: true
-                    showDotAndDotDot: false
-                    showHidden: false
-                    showOnlyReadable: true
-                    sortCaseSensitive: false
-                    onFolderChanged: browseList.currentIndex = 0
-                  }
-
-                  delegate: Rectangle {
-                    id: browseRow
-                    required property int index
-                    required property string fileName
-                    required property string filePath
-                    required property bool fileIsDir
-                    width: ListView.view.width
-                    height: Style.space(44)
-                    radius: Style.cornerRadius
-                    color: ListView.isCurrentItem || rowArea.containsMouse ? Color.menu.selectedBackground : "transparent"
-
-                    MouseArea {
-                      id: rowArea
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onEntered: {
-                        browseList.currentIndex = browseRow.index
-                        root.hoverText = browseRow.fileIsDir ? "" : browseRow.fileName
-                        if (!browseRow.fileIsDir && root.selectedTakesWallpaper)
-                          root.previewWallpaper(root.current, { path: browseRow.filePath, strength: root.strength, blur: root.currentBlur })
-                      }
-                      onExited: { root.hoverText = ""; previewEnd.restart() }
-                      onClicked: root.openBrowsed(browseRow.index)
-                    }
-
-                    Item {
-                      id: browseThumb
-                      anchors.left: parent.left
-                      anchors.leftMargin: Style.space(6)
-                      anchors.verticalCenter: parent.verticalCenter
-                      width: Style.space(64)
-                      height: Style.space(36)
-
-                      // A plain drawn folder, so no icon font is needed.
-                      Item {
-                        visible: browseRow.fileIsDir
-                        anchors.centerIn: parent
-                        width: Style.space(30)
-                        height: Style.space(22)
-                        Rectangle { x: 0; y: 0; width: parent.width * 0.45; height: parent.height * 0.3; radius: Style.space(2); color: root.muted }
-                        Rectangle { x: 0; y: parent.height * 0.18; width: parent.width; height: parent.height * 0.82; radius: Style.space(3); color: root.muted }
-                      }
-
-                      Image {
-                        visible: !browseRow.fileIsDir
-                        anchors.fill: parent
-                        source: browseRow.fileIsDir ? "" : Palette.fileUrl(browseRow.filePath)
-                        sourceSize.height: Style.space(72)
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
-                        cache: false
-                      }
-                    }
-
-                    Text {
-                      anchors.left: browseThumb.right
-                      anchors.leftMargin: Style.space(10)
-                      anchors.right: rowAdd.visible ? rowAdd.left : parent.right
-                      anchors.rightMargin: Style.space(8)
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: browseRow.fileName
-                      elide: Text.ElideMiddle
-                      color: root.text
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                    }
-
-                    TextButton {
-                      id: rowAdd
-                      visible: browseRow.fileIsDir
-                      anchors.right: parent.right
-                      anchors.rightMargin: Style.space(6)
-                      anchors.verticalCenter: parent.verticalCenter
-                      label: "Add folder"
-                      onActivated: { root.addImageSource(browseRow.filePath); root.closeBrowser() }
-                    }
-                  }
-                }
-
-                Text {
-                  anchors.centerIn: parent
-                  visible: folderModel.status === FolderListModel.Ready && folderModel.count === 0
-                  text: "No folders or PNG/JPEG images here."
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-              }
-
-              Row {
-                spacing: Style.space(8)
-                TextButton {
-                  label: "Add this folder"
-                  enabled: root.browseFolder !== ""
-                  onActivated: { root.addImageSource(root.browseFolder); root.closeBrowser() }
-                }
-                TextButton { label: "Close"; onActivated: root.closeBrowser() }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Click an image to use it, or add a whole folder. Only PNG and JPEG files are listed: those are the formats Ghostty can show. Nothing is copied or changed. "
-                  + "Keys: ↑ ↓ move, Enter opens, Backspace goes up, A adds this folder, / types a path, Esc closes."
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Flickable {
-              visible: !root.browsing
-              width: parent.width
-              height: Math.min(wallSections.implicitHeight, Style.space(320))
-              contentWidth: width
-              contentHeight: wallSections.implicitHeight
-              clip: true
-              interactive: contentHeight > height
-              boundsBehavior: Flickable.StopAtBounds
-
-              Column {
-                id: wallSections
-                width: parent.width
-                spacing: Style.space(10)
-
-                Repeater {
-                  model: root.opened && root.tab === "wallpapers" && !root.browsing ? root.wallpaperSections : []
-
-                  delegate: Column {
-                    id: wallSection
-                    required property var modelData
-                    readonly property int indent: Style.space(18) * modelData.depth
-                    width: wallSections.width
-                    spacing: Style.space(6)
-
-                    Item {
-                      x: wallSection.indent
-                      width: parent.width - x
-                      height: Math.max(sectionText.implicitHeight, sectionRemove.visible ? sectionRemove.height : 0)
-
-                      Column {
-                        id: sectionText
-                        anchors.left: parent.left
-                        anchors.right: sectionRemove.visible ? sectionRemove.left : parent.right
-                        anchors.rightMargin: Style.space(8)
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Style.space(2)
-
-                        Row {
-                          spacing: Style.space(8)
-                          Text {
-                            visible: !wallSection.modelData.empty
-                            text: wallSection.modelData.collapsed ? "▸" : "▾"
-                            color: sectionArea.containsMouse ? root.text : root.muted
-                            font.family: root.fontFamily
-                            font.pixelSize: Style.font.body
-                          }
-                          Text {
-                            id: sectionTitle
-                            text: wallSection.modelData.title
-                            color: root.text
-                            font.family: root.fontFamily
-                            font.pixelSize: Style.font.body
-                            font.bold: wallSection.modelData.depth === 0
-                          }
-                          Text {
-                            anchors.baseline: sectionTitle.baseline
-                            visible: !wallSection.modelData.empty
-                            text: wallSection.modelData.count + (wallSection.modelData.count === 1 ? " image" : " images")
-                            color: root.muted
-                            font.family: root.fontFamily
-                            font.pixelSize: Style.font.caption
-                          }
-                        }
-
-                        Text {
-                          visible: text !== ""
-                          width: parent.width
-                          elide: Text.ElideMiddle
-                          text: [wallSection.modelData.detail, wallSection.modelData.note].filter(function (t) { return t }).join(" · ")
-                          color: root.muted
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
-                        }
-                      }
-
-                      MouseArea {
-                        id: sectionArea
-                        anchors.fill: sectionText
-                        hoverEnabled: true
-                        enabled: !wallSection.modelData.empty
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.toggleSection(wallSection.modelData.key)
-                      }
-
-                      TextButton {
-                        id: sectionRemove
-                        visible: wallSection.modelData.source !== ""
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        label: "Remove"
-                        onActivated: root.removeImageSource(wallSection.modelData.source)
-                      }
-                    }
-
-                    Flow {
-                      visible: wallSection.modelData.images.length > 0
-                      x: wallSection.indent
-                      width: parent.width - x
-                      spacing: Style.space(8)
-                      opacity: root.targetTakesWallpaper ? 1 : 0.4
-
-                      Repeater {
-                        model: wallSection.modelData.images
-                        delegate: WallTile {
-                          required property var modelData
-                          path: modelData
-                          removable: wallSection.modelData.removableImages
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          // What newly opened terminals get.
-          Column {
-            visible: root.tab === "default"
-            width: parent.width
-            spacing: Style.space(10)
-
-            Text {
-              text: "By project folder"
-              color: root.text
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
-
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: "A terminal working inside one of these folders gets that project's look. "
-                + (root.selectedTerm && (root.selectedTerm.root || root.selectedTerm.cwd)
-                  ? "The selected terminal is in " + (root.selectedTerm.root || root.selectedTerm.cwd) + "." : "")
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Row {
-              spacing: Style.space(10)
-              TextButton {
-                label: root.selectedTerm && (root.selectedTerm.root || root.selectedTerm.cwd)
-                  ? "Use this look for " + Palette.basename(root.selectedTerm.root || root.selectedTerm.cwd) : "Use this look for its folder"
-                opacity: root.selectedTerm && (root.selectedTerm.look || root.selectedTerm.wallpaper) && (root.selectedTerm.root || root.selectedTerm.cwd) ? 1 : 0.4
-                onActivated: root.saveProjectFrom(root.selectedTerm)
-              }
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "or press F"
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Flow {
-              width: parent.width
-              spacing: Style.space(8)
-              Repeater {
-                model: root.opened && root.tab === "default" ? root.projects : []
-                delegate: Rectangle {
-                  id: ruleChip
-                  required property var modelData
-                  readonly property string accentHex: Palette.lookAccent(modelData.look) || root.accentHex
-                  width: ruleRow.implicitWidth + Style.space(16)
-                  height: ruleRow.implicitHeight + Style.space(8)
-                  radius: Style.cornerRadius
-                  color: "transparent"
-                  border.width: Math.max(1, Style.space(1))
-                  border.color: Util.alpha(accentHex, 0.7)
-
-                  MouseArea {
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    onEntered: root.hoverText = ruleChip.modelData.path
-                    onExited: root.hoverText = ""
-                  }
-
-                  Row {
-                    id: ruleRow
-                    anchors.centerIn: parent
+                  Group {
+                    width: parent.width
                     spacing: Style.space(8)
-                    Rectangle { width: Style.space(10); height: width; radius: width / 2; color: ruleChip.accentHex; anchors.verticalCenter: parent.verticalCenter }
-                    Text {
-                      text: Palette.basename(ruleChip.modelData.path) + "  " + root.ruleLabel(ruleChip.modelData)
-                      color: root.text
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                    }
-                    Text {
-                      text: "\u00d7"
-                      color: removeArea.containsMouse ? root.text : root.muted
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      MouseArea {
-                        id: removeArea
-                        anchors.fill: parent
-                        anchors.margins: -Style.space(4)
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.removeProject(ruleChip.modelData.path)
+                    Repeater {
+                      model: [
+                        root.catalog.aether ? "✓ Aether " + String(root.catalog.aetherVersion).replace(/^aether /, "") + ": moods and colour palettes"
+                          : root.catalog.aetherInstalled ? "✗ Aether is too old for moods: omarchy update" : "✗ Aether is not installed: omarchy pkg add aether",
+                        root.catalog.ghostty ? (root.catalog.launcher ? "✓ Ghostty is set up for wallpapers, text shadow and glass" : "✗ Ghostty is installed but not set up for wallpapers yet")
+                          : "✗ Ghostty is not installed: omarchy install terminal ghostty",
+                        root.catalog.themes.length + " Omarchy themes · " + root.savedLooks.length + " saved looks · " + root.projects.length + " project folders"
+                      ]
+                      delegate: Text {
+                        required property var modelData
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: modelData
+                        color: root.text
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
                       }
                     }
+                  }
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "github.com/ekkostech/omarchy-ombre · run ombre --check in a terminal for a full report."
+                    color: root.muted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
               }
             }
-
-            Rectangle { width: parent.width; height: Math.max(1, Style.space(1)); color: root.subtle }
-
-            Text {
-              text: "When a new terminal opens, give it:"
-              color: root.text
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Row {
-              spacing: Style.space(8)
-
-              TextButton {
-                label: "Its own colors"
-                chosen: root.newDefault.mode === "none"
-                onActivated: root.setDefaultMode("none")
-              }
-              TextButton {
-                label: "A different tint each"
-                chosen: root.newDefault.mode === "auto"
-                onActivated: root.setDefaultMode("auto")
-              }
-              TextButton {
-                label: "A saved look"
-                chosen: root.newDefault.mode === "look"
-                onActivated: root.setDefaultMode("look")
-              }
-            }
-
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: root.newDefault.mode === "auto"
-                ? "Each new terminal gets the tint the fewest open terminals have, so new agents never look alike."
-                : root.newDefault.mode === "look"
-                  ? "New terminals open as " + root.defaultLabel + "."
-                  : "New terminals keep their usual colors."
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Row {
-              spacing: Style.space(10)
-
-              TextButton {
-                label: root.selectedTerm ? "Save the look of \u201c" + root.selectedTerm.title.slice(0, 40) + "\u201d as the default" : "Save as default"
-                opacity: root.selectedTerm && (root.selectedTerm.look || root.selectedTerm.wallpaper) ? 1 : 0.4
-                onActivated: if (root.selectedTerm) root.saveDefaultFrom(root.selectedTerm)
-              }
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "or press D"
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            elide: Text.ElideRight
-            text: root.hoverText
-              || "Ctrl-click / + select · Ctrl+F search · Ctrl+S save · Ctrl+Z / Shift+Z undo / redo active · Tab switch · Esc close"
-            color: root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
           }
         }
       }

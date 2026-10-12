@@ -11,7 +11,7 @@ const P = {};
 vm.runInNewContext(src + "\n" + [
   "layerLook", "foregroundLook", "textLook", "backgroundLook", "lookForeground", "ghosttyColors", "HUES", "tintLook", "normalizeLook", "sameLook", "lookBackground", "lookAccent", "sequence", "isLight", "mix",
   "parseState", "terminals", "match", "parseCatalog", "parseModes", "parseMoods", "projectFor", "normalizeWallpaper", "normalizeBlur", "sameWallpaper",
-  "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "themeGradient", "borderPair", "isImagePath", "themePalette", "parseToml"
+  "colourLooks", "pretty", "lookLabel", "agentState", "pulseColor", "borderCommand", "opacityPair", "aetherPalette", "themeGradient", "borderPair", "isImagePath", "themePalette", "parseToml"
 ].map((n) => `P.${n} = ${n};`).join("\n"), { P, JSON, Math });
 
 test("tints mix into the theme background and stay dark on dark themes", () => {
