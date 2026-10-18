@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+Cleaner glass.
+- **No colour bleed**: the blur only mixes cells of the same colour, so a green diff line no longer runs into the red one below it, and a chip keeps its own colour.
+- **Crisp text on glass**: samples are whole pixels, and text over the plain background no longer counts as glass at its edges. Letters on glass keep their shape over the frosted backdrop instead of a sharp patch of wallpaper.
+- **Smooth, not grainy**: an even per-pixel spiral turn replaces the random one, with a fine dither against banding.
+- **Reads as a pane**: a soft rim lit from the top left with shade on the far side, corners rounded by a few pixels, and a slightly more saturated backdrop, as Apple's and Hyprland's blur do.
+
 ## 2.0.0 — 2026-10-12
 A new picker. 1.x grew one long column: switches, search, selection buttons, cards, colour fields, app linking and favourites all came before the tabs, so the tabs sat two thirds of the way down. 2.0 is laid out in two columns.
 - **Terminals on the left**: every terminal as a row with its live thumbnail in its own colours, its project folder, workspace and current look. Click one to style it, tick several to style them together, and a dot shows an agent that finished. `↑`/`↓` move through them.
