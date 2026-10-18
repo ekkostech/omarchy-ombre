@@ -14,9 +14,10 @@
 #   ombre theme:tokyo-night    any installed Omarchy theme
 #   ombre colour '#e0603a' [vivid|soft|warm|cool|contrast]   a full Aether palette made from one colour
 #   ombre tone auto|dark|light moods follow the theme, or are always dark or light
-#   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15] [--blur 12]  Ghostty only
+#   ombre wallpaper /path/to/wallpaper.jpg [--strength 0.15] [--blur 12]  Ghostty or Omaguake
 #   ombre wallpaper none       remove the focused terminal's wallpaper
 #   ombre blur 12             blur the current wallpaper (0–40; 0 is off)
+#   ombre setup-omaguake       enable Omaguake wallpapers (--undo reverts)
 #   ombre setup-ghostty        let new Ghostty windows take wallpapers (--undo reverts)
 #   ombre hide /path/to/wallpaper.jpg   hide a wallpaper from the picker's strips (file untouched); 'unhide' or 'unhide all'
 #   ombre images add PATH...   add wallpapers from anywhere: PNG/JPEG files or whole folders (only read, never changed)
