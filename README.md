@@ -303,3 +303,38 @@ omarchy plugin remove ekkostech.ombre
 ## License
 
 MIT · Made by **ekkOStech**
+
+
+## Session identity (2.1)
+
+Ombre discovers ordinary terminal windows and local tmux panes, including
+Omaguake 0.9.10 tabs backed by its isolated tmux server. Use `ombre sessions`
+(or `ombre sessions api`) to open the searchable picker. Search matches labels,
+commands, titles, folders, projects and workspaces. Arrow keys select results;
+Enter in search, Ctrl+Enter in the picker, double-click, or **Jump ↗** switches
+to the selected session. No shortcut is overwritten automatically.
+
+Name the selected session in **Name this session…**, then press Enter. Clear it
+and press Enter to remove the label. Window labels survive Ombre reloads while
+the process lives. Pane labels and looks live on that specific tmux pane and
+survive detaching, reconnecting, and shell reloads. They are not inherited by
+new panes after the server exits. Existing saved project rules apply separately
+to each pane using its current working directory; project rules survive reboot.
+
+Pane colors use tmux's native pane-local background, foreground, cursor and
+16-color palette options. Hover previews, saved looks, independent text/background
+controls and reset are supported. Reset restores the pane's previous overrides
+and inheritance. Neighboring panes and the host terminal palette are untouched.
+Wallpapers, glass and compositor borders remain window capabilities.
+
+Requires Python 3 and tmux 3.8 for the tested pane integration. Ordinary window
+styling still works without tmux. Discovery checks owned sockets in
+`$TMUX_TMPDIR/tmux-$UID` (normally `/tmp/tmux-$UID`) and `$TMUX` when supplied.
+It does not connect to remote hosts or read terminal contents. Detached sessions
+appear in the list, but must be attached before Jump can focus them. Omaguake
+navigation uses its existing tab IPC and numeric tab order; manually renamed
+Omaguake sessions and non-tmux fallback tabs are not supported. Select the desired
+Omaguake row explicitly: the current upstream IPC does not expose its focused tab.
+
+For reproducible project colors, style a session and press **F** to save its look
+for that project folder, or use the existing `ombre project set` command.

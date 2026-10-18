@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Local tmux/Omaguake session adapter. Never inject commands into a shell."""
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+
+FIELDS = ['pane_id', 'pane_pid', 'pane_tty', 'session_id', 'session_name',
+          'window_id', 'window_name', 'pane_current_path', 'pane_current_command',
+          'pane_active', 'window_active', '@ombre-label', '@ombre-look']
+
+
+def run(args, required=False):
+    try:
+        p = subprocess.run(args, text=True, capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        if required:
+            raise ValueError(str(e)) from e
+        return ''
+    if required and p.returncode:
+        raise ValueError(p.stderr.strip() or 'Command failed')
+    return p.stdout if p.returncode == 0 else ''
+
+
+def process_stamp(pid):
+    try:
+        return Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, ValueError, IndexError):
+        return ''
+
+
+def sockets():
+    base = Path(os.environ.get('TMUX_TMPDIR', '/tmp')) / f'tmux-{os.getuid()}'
+    candidates = list(base.glob('*'))
+    if os.environ.get('TMUX'):
+        candidates.append(Path(os.environ['TMUX'].split(',')[0]))
+    out = []
+    for path in sorted(set(candidates)):
+        try:
+            info = path.lstat()
+            if stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid():
+                out.append(str(path))
+        except OSError:
+            pass
+    return out[:32]
+
+
+def tmux(sock, *args, required=False):
+    return run(['tmux', '-N', '-S', sock, *args], required)
+
+
+def ancestor(pid, windows):
+    seen = set()
+    while pid and pid not in seen:
+        if pid in windows:
+            return windows[pid]
+        seen.add(pid)
+        try:
+            pid = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return None
+
+
+def project_root(cwd):
+    p = Path(cwd)
+    for parent in [p, *p.parents]:
+        if (parent / '.git').exists():
+            return str(parent)
+    return ''
+
+
+def discover():
+    try:
+        windows = {int(w['pid']): w for w in json.loads(run(['hyprctl', '-j', 'clients']) or '[]') if w.get('pid', 0) > 0}
+    except (ValueError, KeyError):
+        windows = {}
+    result = []
+    for sock in sockets():
+        server = tmux(sock, 'display-message', '-p', '#{pid}').strip()
+        stamp = process_stamp(server) if server.isdigit() else ''
+        if not stamp:
+            continue
+        clients = []
+        for row in tmux(sock, 'list-clients', '-F', '#{client_pid}\t#{session_id}\t#{client_tty}').splitlines():
+            parts = row.split('\t')
+            if len(parts) == 3 and parts[0].isdigit():
+                clients.append((parts[1], parts[2], ancestor(int(parts[0]), windows)))
+        rows = tmux(sock, 'list-panes', '-a', '-F', '\t'.join('#{' + k + '}' for k in FIELDS))
+        seen = set()
+        for row in rows.splitlines():
+            vals = row.split('\t')
+            if len(vals) != len(FIELDS):
+                continue
+            d = dict(zip(FIELDS, vals))
+            if d['pane_id'] in seen or not re.fullmatch(r'%\d+', d['pane_id']) or not re.fullmatch(r'/dev/pts/\d+', d['pane_tty']):
+                continue
+            seen.add(d['pane_id'])
+            parents = [c for c in clients if c[0] == d['session_id']]
+            visible = next((c[2] for c in parents if c[2] and c[2].get('focusHistoryID') == 0), None)
+            parent = visible or next((c[2] for c in parents if c[2]), {})
+            oma = Path(sock).name == 'omaguake' and re.fullmatch(r'omaguake_tab_\d+', d['session_name']) is not None
+            identity = json.dumps([sock, server, stamp, d['pane_id']], separators=(',', ':'))
+            try:
+                look = json.loads(d['@ombre-look'] or 'null')
+            except ValueError:
+                look = None
+            result.append(dict(sessionId=identity, backend='omaguake' if oma else 'tmux',
+                socket=sock, pane=d['pane_id'], session=d['session_id'], sessionName=d['session_name'],
+                window=d['window_id'], pid=d['pane_pid'], pty=d['pane_tty'][5:],
+                title=d['session_name'] + ' / ' + d['window_name'] + ' / ' + d['pane_id'],
+                label=d['@ombre-label'], command=d['pane_current_command'], cwd=d['pane_current_path'],
+                root=project_root(d['pane_current_path']), address='',
+                hostAddress=str(parent.get('address', '')).removeprefix('0x'),
+                workspace=str(parent.get('workspace', {}).get('name', '')),
+                focused=bool(visible and d['pane_active'] == '1' and d['window_active'] == '1'),
+                cls='Omaguake' if oma else 'tmux', w=16, h=9, visible=bool(parents),
+                wallpaperReady=False, ghostty=False, confDir='', wallpaper=None, look=look,
+                clientPtys=[c[1].removeprefix('/dev/') for c in parents],
+                attached=bool(parents)))
+    return result
+
+
+def checked_color(v):
+    if v and not re.fullmatch(r'#[0-9a-fA-F]{6}', v):
+        raise ValueError('Invalid color')
+    return v
+
+
+def action(req):
+    # Resolve a fresh identity on every operation, including server start time.
+    sessions = discover()
+    term = next((t for t in sessions if t['sessionId'] == req.get('sessionId')), None)
+    if term is None:
+        raise ValueError('Session has ended; refresh the list')
+    sock, pane = term['socket'], term['pane']
+    op = req.get('op')
+    if op == 'label':
+        label = req.get('label', '')
+        if not isinstance(label, str) or len(label) > 64 or any(ord(c) < 32 or ord(c) == 127 for c in label):
+            raise ValueError('Label must be at most 64 characters without control characters')
+        tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-label', label, required=True)
+    elif op == 'style':
+        bg, fg, cursor = [checked_color(req.get(k, '')) for k in ('background', 'foreground', 'cursor')]
+        colors = req.get('colors', [])
+        if not isinstance(colors, list) or len(colors) not in (0, 16):
+            raise ValueError('Expected 16 palette colors')
+        colors = [checked_color(c) for c in colors]
+        # Snapshot pane-local overrides exactly; reset restores inheritance too.
+        saved = tmux(sock, 'show-options', '-pv', '-t', pane, '@ombre-original').strip()
+        names = ['window-style', 'window-active-style', 'cursor-colour'] + [f'pane-colours[{i}]' for i in range(16)]
+        if not saved:
+            original = {}
+            for name in names:
+                raw = tmux(sock, 'show-options', '-p', '-t', pane, name).strip()
+                original[name] = tmux(sock, 'show-options', '-pv', '-t', pane, name).strip() if raw and raw != name else None
+            saved = json.dumps(original)
+            tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-original', saved, required=True)
+        original = json.loads(saved)
+        args = []
+        values = dict(original)
+        if req.get('look') is not None:
+            style = ','.join(k + '=' + v for k, v in [('bg', bg), ('fg', fg)] if v)
+            for name in ('window-style', 'window-active-style'):
+                values[name] = ','.join(filter(None, [original.get(name), style])) if style else original.get(name)
+            if cursor:
+                values['cursor-colour'] = cursor
+            for i, color in enumerate(colors):
+                values[f'pane-colours[{i}]'] = color
+        for name in names:
+            if args:
+                args.append(';')
+            value = values.get(name)
+            args += ['set-option', '-p' if value is not None else '-pu', '-t', pane, name]
+            if value is not None:
+                args.append(value)
+        tmux(sock, *args, required=True)
+        if req.get('persist'):
+            tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-look', json.dumps(req.get('look')), required=True)
+            if req.get('look') is None:
+                tmux(sock, 'set-option', '-pu', '-t', pane, '@ombre-original', required=True)
+    elif op == 'focus':
+        tmux(sock, 'select-window', '-t', term['session'] + ':' + term['window'], required=True)
+        tmux(sock, 'select-pane', '-t', pane, required=True)
+        if term['backend'] == 'omaguake':
+            tabs = sorted({int(t['sessionName'].rsplit('_', 1)[1]) for t in sessions if t['backend'] == 'omaguake' and t['attached']})
+            tab = int(term['sessionName'].rsplit('_', 1)[1])
+            if tab not in tabs:
+                raise ValueError('Omaguake tab is detached; open Omaguake to restore it')
+            run(['omarchy-shell', 'omaguake', 'show'], True)
+            run(['omarchy-shell', 'omaguake', 'selectTab', str(tabs.index(tab))], True)
+        elif term['hostAddress']:
+            run(['hyprctl', 'dispatch', 'focuswindow', 'address:0x' + term['hostAddress']], True)
+        else:
+            raise ValueError('Session is detached; attach it with tmux before switching')
+    else:
+        raise ValueError('Unknown session action')
+
+
+def main():
+    if len(sys.argv) == 1 or sys.argv[1] == 'list':
+        print(json.dumps({'sessions': discover(), 'starts': {p.name: process_stamp(p.name) for p in Path('/proc').iterdir() if p.name.isdigit()}}))
+    elif sys.argv[1] == 'serve':
+        for line in sys.stdin:
+            try:
+                req = json.loads(line)
+                action(req)
+                print(json.dumps({'ok': True, 'focused': req.get('op') == 'focus'}), flush=True)
+            except (ValueError, TypeError, KeyError) as e:
+                print(json.dumps({'error': str(e)}), flush=True)
+    else:
+        action(json.loads(sys.argv[1]))
+
+if __name__ == '__main__':
+    main()

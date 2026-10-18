@@ -2,6 +2,7 @@
 # ombre: script the Ombre plugin from a shell or a keybinding.
 #
 #   ombre                      open the picker
+#   ombre sessions [SEARCH]    find and jump to a terminal window, Omaguake tab or tmux pane
 #   ombre red                  tint the focused terminal
 #   ombre next                 cycle the focused terminal through the hues
 #   ombre reset                clear the focused terminal
@@ -72,6 +73,9 @@ call() {
 case ${1:-} in
   "") exec omarchy-shell shell toggle "$id" '{}' ;;
   -h|--help) usage ;;
+  sessions)
+    shift
+    exec omarchy-shell shell summon "$id" "$(jq -nc --arg query "$*" '{sessions:true,query:$query}')" ;;
   --version) jq -r '"ombre " + .version' "$(dirname "$(readlink -f "$0")")/../manifest.json"; exit ;;
   --list)
     call state "" # the first call starts a fresh scan

@@ -2,7 +2,7 @@
 .import "Palette.js" as Palette
 
 // Pure feature state: no filesystem, compositor or terminal writes.
-function key(term) { return term ? String(term.pid) + ":" + term.pty + ":" + term.address : ""; }
+function key(term) { return term ? (term.sessionId || String(term.pid) + ":" + term.pty + ":" + term.address + ":" + (term.started || "")) : ""; }
 function snapshot(term) {
   return JSON.parse(JSON.stringify({ look: Palette.normalizeLook(term && term.look),
     wallpaper: Palette.normalizeWallpaper(term && term.wallpaper) }));
@@ -44,7 +44,7 @@ function filtered(terminals, query, workspace) {
   for (var i = 0; i < terminals.length; i++) {
     var t = terminals[i];
     if (workspace !== "" && String(t.workspace) !== String(workspace)) continue;
-    var text = [t.title, t.cwd, t.root, t.workspace, t.cls].join(" ").toLowerCase();
+    var text = [t.label, t.title, t.command, t.cwd, t.root, t.workspace, t.cls].join(" ").toLowerCase();
     if (words.every(function (w) { return text.indexOf(w) >= 0; })) out.push(Object.assign({}, t, {sourceIndex: i}));
   }
   return out;

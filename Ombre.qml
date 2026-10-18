@@ -5,6 +5,7 @@ import Quickshell.Io
 import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Palette.js" as Palette
 import "Workspace.js" as Workspace
@@ -26,6 +27,8 @@ Item {
 
   property bool opened: false
   property var terminals: []
+  property var sessionLabels: ({})
+  property string sessionMessage: ""
   property int current: 0
   property string previewPty: ""
   property var previewLook: null
@@ -45,7 +48,7 @@ Item {
   readonly property var sortedLooks: Workspace.sorted(savedLooks, favoritesOnly)
   readonly property var favoriteLooks: Workspace.sorted(savedLooks, true)
   readonly property var actionTargets: Workspace.targets(terminals, filteredTerminals, markedKeys, current)
-  readonly property bool targetTakesWallpaper: actionTargets.some(function (i) { return terminals[i].wallpaperReady })
+  readonly property bool targetTakesWallpaper: actionTargets.some(function (i) { return terminals[i] && terminals[i].wallpaperReady })
   readonly property var selectedHistory: selectedTerm ? histories[Workspace.key(selectedTerm)] || {past: [], future: []} : ({past: [], future: []})
   onSearchTextChanged: resetFilterSelection()
   onWorkspaceOnlyChanged: resetFilterSelection()
@@ -146,14 +149,14 @@ Item {
   property string omarchyPath: Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy"
 
   property string fontFamily: Style.font.menuFamily
-  readonly property color surface: Color.menu.background
-  readonly property color text: Color.menu.text
-  readonly property color muted: Util.alpha(Color.menu.text, 0.6)
-  readonly property color subtle: Util.alpha(Color.menu.text, 0.14)
-  readonly property color accent: Color.accent
-  readonly property string themeBackground: String(Color.background)
+  readonly property color surface: Commons.Color.menu.background
+  readonly property color text: Commons.Color.menu.text
+  readonly property color muted: Util.alpha(Commons.Color.menu.text, 0.6)
+  readonly property color subtle: Util.alpha(Commons.Color.menu.text, 0.14)
+  readonly property color accent: Commons.Color.accent
+  readonly property string themeBackground: String(Commons.Color.background)
   readonly property bool lightTheme: Palette.isLight(themeBackground)
-  readonly property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
+  readonly property var borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(2)))
   readonly property int pad: Style.spacing.panelPadding
   readonly property int swatchSize: Style.space(18)
 
@@ -247,6 +250,9 @@ Item {
 
   // ---- Shell lifecycle --------------------------------------------------
   function open(payloadJson) {
+    var request = {}
+    try { request = JSON.parse(payloadJson || "{}") } catch (error) { }
+    if (request.sessions === true) root.searchText = String(request.query || "")
     root.openingWorkspace = Hyprland.focusedWorkspace ? String(Hyprland.focusedWorkspace.name || Hyprland.focusedWorkspace.id) : ""
     root.markedKeys = []
     root.view = "style"
@@ -259,7 +265,7 @@ Item {
     root.scan()
     root.scanImages()
     root.refreshCatalog()
-    Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function () { if (request.sessions === true) terminalSearch.forceActiveFocus(); else keyCatcher.forceActiveFocus() })
   }
 
   // The catalog is cheap but forks a process per theme, so refresh it at most
@@ -316,7 +322,7 @@ Item {
       filteredCount: root.filteredTerminals.length,
       terminals: root.terminals.map(function (t) {
         return { pty: t.pty, pid: t.pid, address: "0x" + t.address, workspace: t.workspace,
-                 title: t.title, kind: t.look ? t.look.kind : "", look: Palette.lookLabel(t.look),
+                 title: t.title, label: t.label || "", sessionId: t.sessionId || "", backend: t.backend || "window", command: t.command || "", cwd: t.cwd || "", kind: t.look ? t.look.kind : "", look: Palette.lookLabel(t.look),
                  wallpaper: t.wallpaper ? t.wallpaper.path : "", wallpaperReady: t.wallpaperReady }
       })
     })
@@ -814,6 +820,47 @@ Item {
   }
 
   // ---- Scanning ---------------------------------------------------------
+  function sessionAction(request) {
+    sessionMessage = ""
+    if (sessionWorker.running) sessionWorker.write(JSON.stringify(request) + "\n")
+    else sessionMessage = "Session adapter unavailable"
+  }
+
+  function labelSession(value) {
+    var t = root.selectedTerm
+    if (!t) return
+    var label = value.trim()
+    if (label && !Workspace.name(label)) { root.sessionMessage = "Use a label of at most 64 characters."; return }
+    if (t.sessionId) root.sessionAction({op: "label", sessionId: t.sessionId, label: label})
+    else {
+      var labels = Object.assign({}, root.sessionLabels)
+      if (label) labels[Workspace.key(t)] = label
+      else delete labels[Workspace.key(t)]
+      root.sessionLabels = labels
+      root.saveConfig()
+    }
+    root.update(root.current, {label: label})
+  }
+
+  function jumpSession() {
+    var t = root.selectedTerm
+    if (!t) return
+    root.endPreview()
+    if (t.sessionId) root.sessionAction({op: "focus", sessionId: t.sessionId})
+    else {
+      root.dismiss()
+      Hyprland.dispatch("focuswindow address:0x" + t.address)
+    }
+  }
+
+  function sessionStyle(term, look, persist) {
+    var text = Palette.textLook(look)
+    root.sessionAction({op: "style", sessionId: term.sessionId, look: look,
+      persist: persist === true, background: Palette.lookBackground(look, root.themeBackground) || "",
+      foreground: Palette.lookForeground(look), cursor: text ? text.palette.cursor : "",
+      colors: text ? text.palette.colors : []})
+  }
+
   function scan() {
     if (scanner.running) { root.rescan = true; return }
     scanner.running = true
@@ -827,12 +874,27 @@ Item {
     var c = output.indexOf("\n@@GHOSTTY@@\n")
     var d = output.indexOf("\n@@MONITORS@@\n")
     var e = output.indexOf("\n@@CWD@@\n")
+    var f = output.indexOf("\n@@SESSIONS@@\n")
     if (a < 0 || b < 0 || c < 0 || d < 0 || e < 0) return null
     var list = Palette.terminals(output.slice(0, a), output.slice(a + 8, b), output.slice(b + 11, c),
-                                 output.slice(c + 13, d), root.runtimeDir, output.slice(d + 14, e), output.slice(e + 9))
+                                 output.slice(c + 13, d), root.runtimeDir, output.slice(d + 14, e), output.slice(e + 9, f < 0 ? undefined : f))
+    if (f >= 0) {
+      try {
+        var extra = JSON.parse(output.slice(f + 14))
+        var panes = extra.sessions || []
+        var clientPtys = []
+        for (var p = 0; p < panes.length; p++) clientPtys = clientPtys.concat(panes[p].clientPtys || [])
+        list = list.filter(function (t) { return clientPtys.indexOf(t.pty) < 0 })
+        for (var n = 0; n < list.length; n++) {
+          list[n].started = extra.starts[list[n].pid] || ""
+          list[n].label = root.sessionLabels[Workspace.key(list[n])] || ""
+        }
+        list = list.concat(panes.map(function(t) { t.look = Palette.normalizeLook(t.look); return t }))
+      } catch (error) { root.sessionMessage = "Could not read terminal sessions" }
+    }
     for (var i = 0; i < list.length; i++) {
       var k = root.known[list[i].pty]
-      if (k && k.pid === list[i].pid) {
+      if (k && k.pid === list[i].pid && k.identity === Workspace.key(list[i])) {
         list[i].look = k.look
         list[i].wallpaper = k.wallpaper
       }
@@ -1170,7 +1232,8 @@ Item {
   }
 
   function show(term, look) {
-    root.send("write " + term.pty + " " + Palette.sequence(look, root.themeBackground))
+    if (term.sessionId) root.sessionStyle(term, look, false)
+    else root.send("write " + term.pty + " " + Palette.sequence(look, root.themeBackground))
     root.paintBorder(term, look)
   }
 
@@ -1182,11 +1245,12 @@ Item {
   }
 
   function persist(term) {
-    if (term.look || term.wallpaper)
+    if (term.sessionId) root.sessionStyle(term, term.look, true)
+    else if (term.look || term.wallpaper)
       root.send("save " + term.pty + " " + JSON.stringify({ pid: term.pid, look: term.look, wallpaper: term.wallpaper }))
     else root.send("forget " + term.pty)
     var known = Object.assign({}, root.known)
-    known[term.pty] = { pid: term.pid, look: term.look, wallpaper: term.wallpaper }
+    known[term.pty] = { pid: term.pid, identity: Workspace.key(term), look: term.look, wallpaper: term.wallpaper }
     root.known = known
   }
 
@@ -1364,14 +1428,14 @@ Item {
       var t = list[i]
       var rule = Palette.projectFor(root.projects, t.cwd)
       var key = rule ? rule.path : ""
-      if (applied[t.address] === key) continue
-      applied[t.address] = key
+      if (applied[Workspace.key(t)] === key) continue
+      applied[Workspace.key(t)] = key
       changed = true
       if (!rule) continue
       var index = root.indexOf(t.pty)
       if (rule.look) root.commit(index, rule.look)
       if (t.wallpaperReady) root.setWallpaper(index, rule.wallpaper || null)
-      if (!root.seen[t.address]) root.markSeen([t])
+      if (!root.seen[Workspace.key(t)]) root.markSeen([t])
     }
     if (changed) root.appliedProject = applied
   }
@@ -1441,14 +1505,14 @@ Item {
   // ---- Default look for new terminals -----------------------------------
   function markSeen(list) {
     var seen = Object.assign({}, root.seen)
-    for (var i = 0; i < list.length; i++) seen[list[i].address] = true
+    for (var i = 0; i < list.length; i++) seen[Workspace.key(list[i])] = true
     root.seen = seen
     root.seenReady = true
   }
 
   function applyDefaults(list) {
     if (!root.seenReady) return
-    var fresh = list.filter(function (t) { return !root.seen[t.address] })
+    var fresh = list.filter(function (t) { return !root.seen[Workspace.key(t)] })
     if (fresh.length === 0) return
     root.markSeen(fresh)
     var aw = Object.assign({}, root.awaiting)
@@ -1624,7 +1688,7 @@ Item {
   }
 
   // ---- Needs-you pulse ---------------------------------------------------
-  readonly property string accentHex: "#" + String(Color.accent).replace(/^#/, "").slice(-6)
+  readonly property string accentHex: "#" + String(Commons.Color.accent).replace(/^#/, "").slice(-6)
 
   // Only terminals pulse, so check the window against a fresh scan first.
   function requestPulse(address) {
@@ -1710,7 +1774,7 @@ Item {
         imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
         moodTone: root.moodTone, baseColour: root.baseColour,
-        projects: root.projects, savedLooks: root.savedLooks
+        projects: root.projects, savedLooks: root.savedLooks, sessionLabels: root.sessionLabels
       })]
     configWriter.running = true
   }
@@ -1718,6 +1782,13 @@ Item {
   function onConfig(text) {
     try {
       var cfg = JSON.parse(text)
+      if (cfg && cfg.sessionLabels && typeof cfg.sessionLabels === "object" && !Array.isArray(cfg.sessionLabels)) {
+        var labels = {}
+        Object.keys(cfg.sessionLabels).slice(-1000).forEach(function(k) {
+          if (Workspace.name(cfg.sessionLabels[k])) labels[k] = cfg.sessionLabels[k]
+        })
+        root.sessionLabels = labels
+      }
       if (cfg && typeof cfg.borders === "boolean") root.borders = cfg.borders
       if (cfg && typeof cfg.pulse === "boolean") root.pulse = cfg.pulse
       if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
@@ -1799,7 +1870,7 @@ Item {
     // beyond one readlink each.
     + 'for p in $(ps -e -o pid=,tty= | awk \'$2 ~ /^pts/ {print $1}\'); do d=$(readlink /proc/$p/cwd 2>/dev/null) || continue; '
     + 'r=$d; while [ -n "$r" ] && [ "$r" != / ] && [ ! -e "$r/.git" ]; do r=${r%/*}; done; [ -e "$r/.git" ] || r=; '
-    + 'printf "%s\\t%s\\t%s\\n" "$p" "$d" "$r"; done; true'
+    + 'printf "%s\\t%s\\t%s\\n" "$p" "$d" "$r"; done; true; printf \"\\n@@SESSIONS@@\\n\"; python3 -I \"$2/bin/ombre-sessions\" list'
 
   readonly property string catalogScript:
     'printf "@@WALLPAPER %s\\n" "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n'
@@ -1925,14 +1996,36 @@ Item {
   }
 
   Process {
+    id: sessionWorker
+    running: true
+    command: ["python3", "-I", root.pluginDir + "/bin/ombre-sessions", "serve"]
+    stdinEnabled: true
+    stdout: SplitParser {
+      onRead: function(line) {
+        try {
+          var reply = JSON.parse(line)
+          if (reply.error) root.sessionMessage = reply.error
+          else if (reply.focused) root.dismiss()
+        } catch (error) { root.sessionMessage = "Invalid session adapter response" }
+      }
+    }
+  }
+  Timer {
+    interval: root.opened ? 3000 : 10000
+    running: root.opened || root.projects.length > 0 || root.newDefault.mode !== "none"
+    repeat: true
+    onTriggered: root.scan()
+  }
+
+  Process {
     id: scanner
-    command: ["sh", "-c", root.scanScript, "sh", root.runtimeDir]
+    command: ["sh", "-c", root.scanScript, "sh", root.runtimeDir, root.pluginDir]
     stdout: StdioCollector { onStreamFinished: root.onScan(text) }
   }
 
   Process {
     id: reapplyScan
-    command: ["sh", "-c", root.scanScript, "sh", root.runtimeDir]
+    command: ["sh", "-c", root.scanScript, "sh", root.runtimeDir, root.pluginDir]
     stdout: StdioCollector { onStreamFinished: root.onReapplyScan(text) }
   }
 
@@ -2228,7 +2321,7 @@ Item {
           width: segText.implicitWidth + Style.space(18)
           height: segText.implicitHeight + Style.space(10)
           radius: Math.max(0, Style.cornerRadius - Style.space(2))
-          color: on ? Color.menu.selectedBackground : segArea.containsMouse ? Util.alpha(root.text, 0.06) : "transparent"
+          color: on ? Commons.Color.menu.selectedBackground : segArea.containsMouse ? Util.alpha(root.text, 0.06) : "transparent"
           Accessible.role: Accessible.Button
           Accessible.name: modelData.label
           Accessible.onPressAction: seg.picked(segItem.modelData.id)
@@ -2429,7 +2522,7 @@ Item {
     width: buttonText.implicitWidth + Style.space(16)
     height: buttonText.implicitHeight + Style.space(12)
     radius: Style.cornerRadius
-    color: chosen ? Color.menu.selectedBackground : "transparent"
+    color: chosen ? Commons.Color.menu.selectedBackground : "transparent"
     border.width: Math.max(1, Style.space(1))
     border.color: chosen ? root.accent : buttonArea.containsMouse ? root.text : root.subtle
 
@@ -2561,7 +2654,7 @@ Item {
       readonly property var term: root.selectedTerm
       readonly property bool here: term !== null && term.visible === true && term.monitor === modelData.name
       readonly property int gap: Style.space(5)
-      readonly property color scrim: Color.menu.scrim
+      readonly property color scrim: Commons.Color.menu.scrim
       readonly property color ring: (term && Palette.lookAccent(term.look)) || root.accent
 
       // The cut-out, in whole pixels; it closes to the middle of the screen when
@@ -2695,6 +2788,7 @@ Item {
           else if (ctrl && k === Qt.Key_A) root.selectVisible(false)
           else if (ctrl && k === Qt.Key_Space) root.toggleMarked(root.current)
           else if (ctrl && k === Qt.Key_S) { root.tab = "saved"; root.tabChosen = true; savedName.forceActiveFocus() }
+          else if (ctrl && (k === Qt.Key_Return || k === Qt.Key_Enter)) root.jumpSession()
           else if (ctrl) return
           else if (k === Qt.Key_Slash) terminalSearch.forceActiveFocus()
           else if (k === Qt.Key_Comma) root.showSettings("")
@@ -2776,10 +2870,12 @@ Item {
             anchors.right: headerRight.left
             anchors.rightMargin: Style.space(16)
             anchors.verticalCenter: parent.verticalCenter
-            placeholderText: "Find a terminal, project or workspace   ( / )"
+            placeholderText: "Find a session, label, command or project   ( / )"
             text: root.searchText
             onTextChanged: if (root.searchText !== text) root.searchText = text
-            onAccepted: keyCatcher.forceActiveFocus()
+            onAccepted: root.jumpSession()
+            Keys.onDownPressed: root.moveCurrent(1, false)
+            Keys.onUpPressed: root.moveCurrent(-1, false)
             Keys.onEscapePressed: { text = ""; keyCatcher.forceActiveFocus() }
             Accessible.name: "Search terminals by title, project or workspace"
           }
@@ -2841,9 +2937,9 @@ Item {
           anchors.right: parent.right
           anchors.bottom: parent.bottom
           elide: Text.ElideRight
-          text: root.hoverText || (root.view === "settings"
+          text: root.sessionMessage || root.hoverText || (root.view === "settings"
             ? "↑ ↓ section · B P O T G switch effects · Esc back to styling"
-            : "↑ ↓ terminal · ← → tab · Ctrl+Space tick · Space next look · 1–8 tint · Ctrl+Z undo · Ctrl+S save · , settings · Esc close")
+            : "Ctrl+Enter jump · ↑ ↓ session · ← → tab · Ctrl+Space tick · Space next look · 1–8 tint · Ctrl+Z undo · Ctrl+S save · , settings · Esc close")
           color: root.muted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -2926,15 +3022,45 @@ Item {
                 anchors.margins: Style.space(4)
                 wrapMode: Text.WordWrap
                 text: root.terminals.length ? "No terminals match. Clear the search or switch to All workspaces." : scanner.running ? "Looking for terminals…"
-                  : "No terminal windows found. Ombre works with terminals that run one process per window (Ghostty through Ombre's launcher, foot, Alacritty, Kitty)."
+                  : "No terminal sessions found. Open a terminal, Omaguake tab or tmux session."
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
 
+              Row {
+                id: identityControls
+                anchors.top: sideHead.bottom
+                anchors.topMargin: Style.space(8)
+                width: parent.width
+                spacing: Style.space(6)
+                TextField {
+                  id: sessionLabel
+                  objectName: "ombreSessionLabel"
+                  width: Math.max(80, parent.width - jumpButton.width - Style.space(6))
+                  placeholderText: "Name this session…"
+                  maximumLength: 64
+                  Binding {
+                    target: sessionLabel
+                    property: "text"
+                    value: root.selectedTerm ? root.selectedTerm.label || "" : ""
+                    when: !sessionLabel.activeFocus
+                  }
+                  enabled: root.selectedTerm !== null
+                  onAccepted: { root.labelSession(text); keyCatcher.forceActiveFocus() }
+                  Accessible.name: "Session label; Enter to save"
+                }
+                TextButton {
+                  id: jumpButton
+                  label: "Jump ↗"
+                  Accessible.name: "Switch to selected terminal session"
+                  onActivated: root.jumpSession()
+                }
+              }
+
               Flickable {
                 id: termList
-                anchors.top: sideHead.bottom
+                anchors.top: identityControls.bottom
                 anchors.topMargin: Style.space(8)
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -2967,7 +3093,7 @@ Item {
                       width: termColumn.width
                       height: Style.space(78)
                       radius: Style.cornerRadius
-                      color: selected ? Color.menu.selectedBackground
+                      color: selected ? Commons.Color.menu.selectedBackground
                         : marked ? Util.alpha(root.accent, 0.10)
                         : rowArea.containsMouse ? Util.alpha(root.text, 0.05) : "transparent"
                       border.width: Math.max(1, Style.space(selected ? 2 : 1))
@@ -2987,6 +3113,7 @@ Item {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: function (mouse) { root.selectCard(row.termIndex, (mouse.modifiers & Qt.ControlModifier) !== 0); keyCatcher.forceActiveFocus() }
+                        onDoubleClicked: { root.current = row.termIndex; root.jumpSession() }
                       }
 
                       // Tick box: add the terminal to the ones being styled.
@@ -3061,7 +3188,7 @@ Item {
                           spacing: Style.space(6)
                           Text {
                             width: Math.min(implicitWidth, parent.width - (needsYou.visible ? needsYou.width + Style.space(6) : 0))
-                            text: row.modelData.title
+                            text: row.modelData.label || row.modelData.title
                             elide: Text.ElideRight
                             color: root.text
                             font.family: root.fontFamily
@@ -3119,7 +3246,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             width: Math.max(0, parent.width - x)
                             text: {
-                              var parts = [row.look ? Palette.lookLabel(row.look) : "Own colours"]
+                              var parts = [row.modelData.backend || "window", row.modelData.command || "", row.look ? Palette.lookLabel(row.look) : "Own colours"]
                               if (row.modelData.wallpaper) parts.push("󰋩 " + Palette.basename(row.modelData.wallpaper.path))
                               if (row.modelData.visible === false) parts.push("off screen")
                               return parts.join(" · ")
@@ -4108,7 +4235,7 @@ Item {
                             width: ListView.view.width
                             height: Style.space(44)
                             radius: Style.cornerRadius
-                            color: ListView.isCurrentItem || rowArea.containsMouse ? Color.menu.selectedBackground : "transparent"
+                            color: ListView.isCurrentItem || rowArea.containsMouse ? Commons.Color.menu.selectedBackground : "transparent"
 
                             MouseArea {
                               id: rowArea
@@ -4342,7 +4469,7 @@ Item {
                   width: settingsNav.width
                   height: Style.space(42)
                   radius: Style.cornerRadius
-                  color: on ? Color.menu.selectedBackground : navArea.containsMouse ? Util.alpha(root.text, 0.05) : "transparent"
+                  color: on ? Commons.Color.menu.selectedBackground : navArea.containsMouse ? Util.alpha(root.text, 0.05) : "transparent"
                   border.width: Math.max(1, Style.space(on ? 2 : 1))
                   border.color: on ? root.accent : "transparent"
                   Accessible.role: Accessible.PageTab

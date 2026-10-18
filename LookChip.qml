@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "Palette.js" as Palette
 
 // A mood or theme drawn in its own colors: its background, its name in its
@@ -11,8 +12,8 @@ Rectangle {
   property string label: ""
   property string image: ""
   property bool chosen: false
-  property color ring: Color.accent
-  property color idle: Util.alpha(Color.menu.text, 0.14)
+  property color ring: Commons.Color.accent
+  property color idle: Util.alpha(Commons.Color.menu.text, 0.14)
   property string fontFamily: Style.font.menuFamily
   readonly property bool hot: area.containsMouse
   readonly property var palette: look && look.palette ? look.palette : null
@@ -56,7 +57,7 @@ Rectangle {
       width: parent.width
       text: chip.label
       elide: Text.ElideRight
-      color: chip.palette ? chip.palette.foreground : Color.menu.text
+      color: chip.palette ? chip.palette.foreground : Commons.Color.menu.text
       font.family: chip.fontFamily
       font.pixelSize: Style.font.bodySmall
       font.bold: true

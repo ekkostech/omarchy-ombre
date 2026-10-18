@@ -1,3 +1,13 @@
+## 2.1.0 — Session identity
+
+- Discover local tmux panes and Omaguake tabs alongside terminal windows.
+- Add session labels and command-aware search; `ombre sessions`, Jump, double-click
+  and Ctrl+Enter navigate to a session without sending keystrokes to its shell.
+- Apply saved project looks per pane; retain pane labels and styles on reconnect.
+- Use pane-local colors and restore original overrides on reset.
+- Validate server lifetime before acting on a session; reject stale targets.
+- Qualify Omarchy's Color singleton to avoid the Qt color-name collision.
+
 # Changelog
 
 ## Unreleased
