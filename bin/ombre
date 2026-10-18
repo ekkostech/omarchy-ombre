@@ -73,6 +73,9 @@ call() {
 case ${1:-} in
   "") exec omarchy-shell shell toggle "$id" '{}' ;;
   -h|--help) usage ;;
+  setup-omaguake)
+    shift
+    exec python3 "$(dirname "$(readlink -f "$0")")/ombre-setup-omaguake" "$@" ;;
   sessions)
     shift
     exec omarchy-shell shell summon "$id" "$(jq -nc --arg query "$*" '{sessions:true,query:$query}')" ;;

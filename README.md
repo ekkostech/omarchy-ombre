@@ -325,7 +325,7 @@ Pane colors use tmux's native pane-local background, foreground, cursor and
 16-color palette options. Hover previews, saved looks, independent text/background
 controls and reset are supported. Reset restores the pane's previous overrides
 and inheritance. Neighboring panes and the host terminal palette are untouched.
-Wallpapers, glass and compositor borders remain window capabilities.
+Wallpapers are available in Omaguake with the renderer bridge below. Glass, text shadows and compositor borders remain Ghostty/window capabilities.
 
 Requires Python 3 and tmux 3.8 for the tested pane integration. Ordinary window
 styling still works without tmux. Discovery checks owned sockets in
@@ -338,3 +338,25 @@ Omaguake row explicitly: the current upstream IPC does not expose its focused ta
 
 For reproducible project colors, style a session and press **F** to save its look
 for that project folder, or use the existing `ombre project set` command.
+
+
+## Omaguake wallpapers (2.2)
+
+Run `ombre setup-omaguake` once, then `omarchy restart shell`. Ombre then exposes
+wallpaper selection, strength, blur, live previews and reset for Omaguake tabs.
+The bridge draws the image behind Omaguake's existing background-only opacity
+shader, so terminal text keeps its opacity. Each tab keeps its own image; no
+commands are sent to the program running inside the terminal.
+
+The installer supports the unmodified Omaguake **0.9.10** Overlay.qml and verifies
+its SHA-256 before changing it. It saves `Overlay.qml.ombre-original` beside the
+file. `ombre setup-omaguake --undo` restores that backup only if the installed
+bridge is unchanged. Updating Omaguake can remove the integration; Ombre detects
+its absence and disables wallpaper capability until a compatible bridge is
+installed. A modified or newer upstream file is refused rather than overwritten.
+
+Rendering state is private to your user in `$XDG_RUNTIME_DIR/ombre/omaguake.json`;
+the chosen image and controls persist on the tmux pane across shell reloads.
+Blur uses the existing `python-pillow` dependency and cached derivatives; original
+images are never edited. Ordinary tmux panes still have colors only. Ghostty's
+glass shader and text shadows are not implemented by this bridge.

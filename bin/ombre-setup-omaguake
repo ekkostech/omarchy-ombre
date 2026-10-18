@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Install a reversible wallpaper bridge into Omaguake 0.9.10."""
+import argparse
+import hashlib
+from pathlib import Path
+import os
+import tempfile
+
+BASE = '621056c5a373ce2fc580f9f72a04ba55035032b126b255503666e1d7a4e34358'
+MARKER = '// Ombre renderer bridge v1'
+BRIDGE = '''  // Ombre renderer bridge v1
+  property var ombreWallpapers: ({})
+  readonly property var ombreWallpaper: tabs.length && currentTabIndex < tabs.length
+    ? (ombreWallpapers[String(tabs[currentTabIndex].id)] || ({})) : ({})
+  FileView {
+    id: ombreWallpaperFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || (Quickshell.env("HOME") + "/.local/state")) + "/ombre/omaguake.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      try { root.ombreWallpapers = JSON.parse(text()) } catch (error) { root.ombreWallpapers = ({}) }
+    }
+    onFileChanged: reload()
+  }
+'''
+IMAGE = '''      Image {
+        id: ombreWallpaperImage
+        width: parent.width
+        y: config.tabsPosition === "top" ? tabBar.height : 0
+        height: parent.height - tabBar.height
+        source: root.ombreWallpaper.uri || ""
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: true
+        visible: status === Image.Ready
+      }
+
+'''
+
+
+def patched(source):
+    if hashlib.sha256(source.encode()).hexdigest() != BASE:
+        raise ValueError('Unsupported or modified Omaguake Overlay.qml; no files changed')
+    source = source.replace('  property bool opened: false', BRIDGE + '\n  property bool opened: false', 1)
+    source = source.replace('      // Terminal Content Area', IMAGE + '      // Terminal Content Area', 1)
+    source = source.replace('layer.enabled: container.cardOpacity < 0.999', 'layer.enabled: ombreWallpaperImage.visible || container.cardOpacity < 0.999', 1)
+    source = source.replace('property color bgColor: Color.background', 'property color bgColor: ombreWallpaperImage.visible ? (root.ombreWallpaper.background || Color.background) : Color.background', 1)
+    source = source.replace('property real bgOpacity: container.cardOpacity', 'property real bgOpacity: ombreWallpaperImage.visible ? root.ombreWallpaper.strength : container.cardOpacity', 1)
+    return source
+
+
+def install(folder, undo=False):
+    target = Path(folder) / 'Overlay.qml'
+    backup = target.with_name('Overlay.qml.ombre-original')
+    source = target.read_text()
+    if undo:
+        if not backup.exists() or source != patched(backup.read_text()):
+            raise ValueError('Integration changed since install; refusing to overwrite it')
+        result = backup.read_text()
+    else:
+        if MARKER in source:
+            if backup.exists() and source == patched(backup.read_text()):
+                return 'Ombre wallpaper bridge already installed'
+            raise ValueError('Existing bridge has changed; refusing to overwrite it')
+        result = patched(source)
+        if backup.exists() and backup.read_text() != source:
+            raise ValueError('Existing backup differs; refusing to replace it')
+        backup.write_text(source)
+    fd, name = tempfile.mkstemp(prefix='.ombre-overlay-', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(result)
+        os.chmod(name, target.stat().st_mode & 0o777)
+        os.replace(name, target)
+    finally:
+        if os.path.exists(name): os.unlink(name)
+    return 'Wallpaper bridge removed' if undo else 'Wallpaper bridge installed; restart Omarchy shell to load it'
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dir', default=str(Path.home()/'.config/omarchy/plugins/bramvanoploo.omaguake'))
+    parser.add_argument('--undo', action='store_true')
+    args = parser.parse_args()
+    try:
+        print(install(args.dir, args.undo))
+    except (ValueError, OSError) as error:
+        parser.exit(1, str(error)+'\n')

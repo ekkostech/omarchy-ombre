@@ -1,3 +1,10 @@
+## 2.2.0 — Omaguake wallpapers
+
+- Add a reversible, version-checked Omaguake 0.9.10 renderer bridge.
+- Display per-tab wallpaper with strength, cached blur, previews and reset while
+  preserving text opacity through Omaguake's existing background shader.
+- Enable wallpaper controls only when the renderer integration is installed.
+
 ## 2.1.0 — Session identity
 
 - Discover local tmux panes and Omaguake tabs alongside terminal windows.

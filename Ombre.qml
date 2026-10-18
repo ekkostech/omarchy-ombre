@@ -240,6 +240,7 @@ Item {
   // Why the selected terminal can't take a wallpaper, or "" when it can.
   readonly property string wallpaperBlocker: {
     if (!catalogLoaded) return ""
+    if (selectedTerm && selectedTerm.backend === "omaguake") return "Install the renderer bridge: ombre setup-omaguake. Then restart the shell."
     if (!catalog.ghostty) return "Wallpapers need Ghostty. Install it and make it your terminal with: omarchy install terminal ghostty"
     if (!catalog.launcher) return "Wallpapers need Ghostty windows opened through Ombre's launcher."
     if (!selectedTerm) return ""
@@ -1245,7 +1246,12 @@ Item {
   }
 
   function persist(term) {
-    if (term.sessionId) root.sessionStyle(term, term.look, true)
+    if (term.sessionId) {
+      root.sessionStyle(term, term.look, true)
+      if (term.wallpaperReady) root.sessionAction({op: "wallpaper", sessionId: term.sessionId,
+        wallpaper: term.wallpaper, persist: true,
+        background: Palette.lookBackground(term.look, root.themeBackground) || root.themeBackground})
+    }
     else if (term.look || term.wallpaper)
       root.send("save " + term.pty + " " + JSON.stringify({ pid: term.pid, look: term.look, wallpaper: term.wallpaper }))
     else root.send("forget " + term.pty)
@@ -1322,6 +1328,11 @@ Item {
   // pid really is Ghostty before signalling it.
   function sendWallpaper(term, wallpaper) {
     var w = Palette.normalizeWallpaper(wallpaper)
+    if (term.backend === "omaguake") {
+      root.sessionAction({op: "wallpaper", sessionId: term.sessionId, wallpaper: w,
+        background: Palette.lookBackground(term.look, root.themeBackground) || root.themeBackground})
+      return
+    }
     root.send("ghostty " + term.pid + " " + (term.confDir || root.runtimeDir + "/ghostty/") + " "
       + root.shadowVariant(term) + " " + Palette.ghosttyColors(term.look, root.themeBackground) + " " + (w ? w.strength + " " + w.blur + " " + w.path : "- 0 -"))
     // Re-send the look once the reload settles, in case it reset the colors.

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Local tmux/Omaguake session adapter. Never inject commands into a shell."""
 import json
+import importlib.machinery
+import importlib.util
+import math
+import tempfile
 import os
 from pathlib import Path
 import re
@@ -10,7 +14,7 @@ import sys
 
 FIELDS = ['pane_id', 'pane_pid', 'pane_tty', 'session_id', 'session_name',
           'window_id', 'window_name', 'pane_current_path', 'pane_current_command',
-          'pane_active', 'window_active', '@ombre-label', '@ombre-look']
+          'pane_active', 'window_active', '@ombre-label', '@ombre-look', '@ombre-wallpaper', '@ombre-render-wallpaper']
 
 
 def run(args, required=False):
@@ -73,12 +77,61 @@ def project_root(cwd):
     return ''
 
 
+def bridge_ready():
+    overlay = Path.home()/'.config/omarchy/plugins/bramvanoploo.omaguake/Overlay.qml'
+    try:
+        return '// Ombre renderer bridge v1' in overlay.read_text()
+    except OSError:
+        return False
+
+
+def publish_wallpapers(sessions):
+    folder = Path(os.environ.get('XDG_RUNTIME_DIR', str(Path.home()/'.local/state'))) / 'ombre'
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = folder.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError('Invalid Ombre runtime directory')
+    data = {}
+    for term in sessions:
+        if term['backend'] == 'omaguake' and term.get('renderWallpaper'):
+            data[term['sessionName'].rsplit('_', 1)[1]] = term['renderWallpaper']
+    encoded = json.dumps(data)
+    target = folder/'omaguake.json'
+    if target.exists() and not target.is_symlink() and target.read_text() == encoded:
+        return
+    fd, tmp = tempfile.mkstemp(prefix='.omaguake-', dir=folder)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(encoded)
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+
+
+def wallpaper(value):
+    if value is None:
+        return None
+    path = Path(value.get('path', ''))
+    strength, blur = float(value.get('strength', .15)), float(value.get('blur', 0))
+    if not path.is_absolute() or not path.is_file() or path.suffix.lower() not in ('.png', '.jpg', '.jpeg'):
+        raise ValueError('Wallpaper must be an existing PNG or JPEG file')
+    if not math.isfinite(strength) or not .01 <= strength <= 1 or not math.isfinite(blur) or not 0 <= blur <= 40:
+        raise ValueError('Invalid wallpaper strength or blur')
+    from PIL import Image
+    with Image.open(path) as image:
+        if image.format not in ('PNG', 'JPEG'):
+            raise ValueError('Unsupported wallpaper image')
+        image.verify()
+    return dict(path=str(path), strength=strength, blur=blur)
+
+
 def discover():
     try:
         windows = {int(w['pid']): w for w in json.loads(run(['hyprctl', '-j', 'clients']) or '[]') if w.get('pid', 0) > 0}
     except (ValueError, KeyError):
         windows = {}
     result = []
+    renderer = bridge_ready()
     for sock in sockets():
         server = tmux(sock, 'display-message', '-p', '#{pid}').strip()
         stamp = process_stamp(server) if server.isdigit() else ''
@@ -108,6 +161,11 @@ def discover():
                 look = json.loads(d['@ombre-look'] or 'null')
             except ValueError:
                 look = None
+            try:
+                wp = json.loads(d['@ombre-wallpaper'] or 'null')
+                render_wp = json.loads(d['@ombre-render-wallpaper'] or 'null')
+            except ValueError:
+                wp = render_wp = None
             result.append(dict(sessionId=identity, backend='omaguake' if oma else 'tmux',
                 socket=sock, pane=d['pane_id'], session=d['session_id'], sessionName=d['session_name'],
                 window=d['window_id'], pid=d['pane_pid'], pty=d['pane_tty'][5:],
@@ -118,7 +176,7 @@ def discover():
                 workspace=str(parent.get('workspace', {}).get('name', '')),
                 focused=bool(visible and d['pane_active'] == '1' and d['window_active'] == '1'),
                 cls='Omaguake' if oma else 'tmux', w=16, h=9, visible=bool(parents),
-                wallpaperReady=False, ghostty=False, confDir='', wallpaper=None, look=look,
+                wallpaperReady=bool(oma and renderer), ghostty=False, confDir='', wallpaper=wp, look=look, renderWallpaper=render_wp,
                 clientPtys=[c[1].removeprefix('/dev/') for c in parents],
                 attached=bool(parents)))
     return result
@@ -182,6 +240,22 @@ def action(req):
             tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-look', json.dumps(req.get('look')), required=True)
             if req.get('look') is None:
                 tmux(sock, 'set-option', '-pu', '-t', pane, '@ombre-original', required=True)
+    elif op == 'wallpaper':
+        if term['backend'] != 'omaguake' or not bridge_ready():
+            raise ValueError('Omaguake wallpaper bridge is not installed')
+        wp = wallpaper(req.get('wallpaper'))
+        rendered = None
+        if wp:
+            loader = importlib.machinery.SourceFileLoader('ombre_blur', str(Path(__file__).with_name('ombre-blur')))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            rendered = dict(wp, uri=Path(module.render(wp['path'], wp['blur'])).as_uri(),
+                            background=checked_color(req.get('background', '')))
+        tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-render-wallpaper', json.dumps(rendered), required=True)
+        if req.get('persist'):
+            tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-wallpaper', json.dumps(wp), required=True)
+        publish_wallpapers(discover())
     elif op == 'focus':
         tmux(sock, 'select-window', '-t', term['session'] + ':' + term['window'], required=True)
         tmux(sock, 'select-pane', '-t', pane, required=True)
@@ -202,14 +276,16 @@ def action(req):
 
 def main():
     if len(sys.argv) == 1 or sys.argv[1] == 'list':
-        print(json.dumps({'sessions': discover(), 'starts': {p.name: process_stamp(p.name) for p in Path('/proc').iterdir() if p.name.isdigit()}}))
+        sessions = discover()
+        publish_wallpapers(sessions)
+        print(json.dumps({'sessions': sessions, 'starts': {p.name: process_stamp(p.name) for p in Path('/proc').iterdir() if p.name.isdigit()}}))
     elif sys.argv[1] == 'serve':
         for line in sys.stdin:
             try:
                 req = json.loads(line)
                 action(req)
                 print(json.dumps({'ok': True, 'focused': req.get('op') == 'focus'}), flush=True)
-            except (ValueError, TypeError, KeyError) as e:
+            except (ValueError, TypeError, KeyError, OSError, ImportError) as e:
                 print(json.dumps({'error': str(e)}), flush=True)
     else:
         action(json.loads(sys.argv[1]))

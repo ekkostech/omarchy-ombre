@@ -16,7 +16,7 @@ loader.exec_module(adapter)
 class SessionsTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='ombre-session-test-')
-        self.env = patch.dict(os.environ, TMUX_TMPDIR=self.temp.name, TMUX='')
+        self.env = patch.dict(os.environ, TMUX_TMPDIR=self.temp.name, TMUX='', XDG_RUNTIME_DIR=self.temp.name)
         self.env.start()
         self.sock = str(Path(self.temp.name) / f'tmux-{os.getuid()}' / 'omaguake')
         Path(self.sock).parent.mkdir(mode=0o700)
@@ -49,6 +49,25 @@ class SessionsTest(unittest.TestCase):
         adapter.action({'op':'style','sessionId':a['sessionId'],'look':None,'persist':True})
         self.assertEqual(adapter.tmux(self.sock, 'show-options', '-pv', '-t', a['pane'], 'window-style').strip(), 'fg=green')
         self.assertEqual(adapter.tmux(self.sock, 'show-options', '-pv', '-t', a['pane'], 'pane-colours[0]').strip(), '')
+
+    def test_wallpaper_publish_reset_and_invalid_image(self):
+        from PIL import Image
+        image = Path(self.temp.name)/'wallpaper #1.png'
+        Image.new('RGB', (32, 32), '#ff0088').save(image)
+        with patch.object(adapter, 'bridge_ready', return_value=True):
+            a = self.panes()[0]
+            self.assertTrue(a['wallpaperReady'])
+            wp = dict(path=str(image), strength=.2, blur=0)
+            adapter.action(dict(op='wallpaper',sessionId=a['sessionId'],wallpaper=wp,background='#123456',persist=True))
+            data=json.loads((Path(self.temp.name)/'ombre/omaguake.json').read_text())
+            self.assertEqual(data['1']['strength'], .2)
+            self.assertIn('%23', data['1']['uri'])
+            self.assertEqual(self.panes()[0]['wallpaper'], wp)
+            adapter.action(dict(op='wallpaper',sessionId=a['sessionId'],wallpaper=None,persist=True))
+            self.assertEqual(json.loads((Path(self.temp.name)/'ombre/omaguake.json').read_text()), {})
+            image.write_text('not an image')
+            with self.assertRaises(OSError):
+                adapter.action(dict(op='wallpaper',sessionId=a['sessionId'],wallpaper=wp))
 
     def test_reused_server_identity_is_rejected(self):
         a = self.panes()[0]
