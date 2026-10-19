@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory(prefix='ombre-glass-test-') as folder:
     out = {}
     for name, token, wallpaper in [('both', 'glass:2a1040:70:20-dark', '0.15 0 /w/a b.png'), ('glass', 'glass:000000:86:36', '0.15 0 /w/a.png'),
                                    ('nowall', 'glass:2a1040:70:20-light', '- 0 -'), ('bad', 'glass:zzzzzz:70:20', '0.15 0 /w/a.png'),
-                                   ('dark', 'dark', '0.15 0 /w/a.png'), ('none', '-', '0.15 0 /w/a.png')]:
+                                   ('dark', 'dark', '0.15 0 /w/a.png'), ('none', '-', '0.15 0 /w/a.png'), ('matrix', 'matrix:24:2:0.3:1:0.6:0:0~-', '- 0 -'), ('matrixglass', 'matrix:24:2:0.3:1:0.6:0:1~glass:000000:60:12-dark', '0.15 0 /w/a.png')]:
       line = f'ghostty {child.pid} {cdir}/ {token} - {wallpaper}\n'
       run = subprocess.run(['sh', '-c', payload['writer'], 'sh', str(d/'runtime'), payload['root']], input=line, text=True, capture_output=True, check=True)
       assert 'wallpaper-ok' in run.stdout, run
@@ -111,6 +111,11 @@ with tempfile.TemporaryDirectory(prefix='ombre-glass-test-') as folder:
   assert.doesNotMatch(out.bad.conf, /background-opacity|custom-shader-animation/);
   assert.deepEqual(names(out.dark), ['text-shadow-dark.glsl']);
   assert.doesNotMatch(out.dark.conf, /background-opacity/);
+  assert.equal(out.matrix.shaders.length,1);
+  assert.match(out.matrix.bodies[0], /const float SIZE = 24.00000/);
+  assert.match(out.matrix.conf, /custom-shader-animation = always/);
+  assert.equal(out.matrixglass.shaders.length,3);
+  assert.match(out.matrixglass.bodies[0], /KEEP_ALPHA = 1.00000/);
   assert.deepEqual(names(out.none), []);
   assert.doesNotMatch(out.none.conf, /custom-shader-animation|background-opacity/);
 });
@@ -118,14 +123,14 @@ with tempfile.TemporaryDirectory(prefix='ombre-glass-test-') as folder:
 const glslang = spawnSync('glslangValidator', ['--version']).status === 0;
 
 test('shaders compile as Ghostty custom shaders, including written glass', {skip: !glslang || !python}, () => {
-  const prelude = '#version 430 core\nuniform sampler2D iChannel0;\nuniform vec3 iResolution;\nlayout(location = 0) out vec4 _fragColor;\n'
+  const prelude = '#version 430 core\nuniform sampler2D iChannel0;\nuniform vec3 iResolution;\nuniform float iTime;\nlayout(location = 0) out vec4 _fragColor;\n'
     + 'void mainImage(out vec4 fragColor, in vec2 fragCoord);\nvoid main() { mainImage(_fragColor, gl_FragCoord.xy); }\n';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ombre-glsl-'));
   try {
     const written = spawnSync('python3', ['-c', `import runpy,pathlib,sys; m=runpy.run_path(sys.argv[1]+'/bin/ombre-glass'); print(m['render'](pathlib.Path(sys.argv[1]+'/shaders/glass.glsl').read_text(), 'ff8800', 40, 0))`, root], {encoding: 'utf8'});
     assert.equal(written.status, 0, written.stderr);
     const sources = {'glass-written': written.stdout};
-    for (const name of ['glass', 'text-shadow-dark', 'text-shadow-light']) sources[name] = fs.readFileSync(path.join(root, 'shaders', name + '.glsl'), 'utf8');
+    for (const name of ['glass', 'matrix', 'text-shadow-dark', 'text-shadow-light']) sources[name] = fs.readFileSync(path.join(root, 'shaders', name + '.glsl'), 'utf8');
     for (const [name, body] of Object.entries(sources)) {
       const file = path.join(dir, name + '.frag');
       fs.writeFileSync(file, prelude + body);

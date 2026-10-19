@@ -76,6 +76,214 @@ Item {
   property string glassColor: "auto"   // "auto" follows each terminal's look, or #rrggbb
   property int glassTint: Palette.GLASS_TINT
   property int glassBlur: Palette.GLASS_BLUR
+  property bool focusMode: false
+  property bool followSessions: true
+  property var privacyKeys: []
+  property var scenes: []
+  property var batchPast: []
+  property var batchFuture: []
+  property bool batchMuted: false
+  property var followSeen: ({})
+  property string studioMessage: ""
+  property var signalStates: ({})
+  function signalFor(t) {
+    var explicit=signalStates[Workspace.key(t)] || t.signal
+    if(explicit)return explicit
+    if(/[◐◓◑◒⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(t.paneTitle || t.title))return "working"
+    if(/✳/.test(t.paneTitle || t.title))return "done"
+    return t.command || "terminal"
+  }
+  function selectSession(t) {
+    for(var i=0;i<terminals.length;i++)if(Workspace.key(terminals[i])===Workspace.key(t)){current=i;searchText="";break}
+    if(t.sessionId && !t.attached)sessionAction({op:"attach",sessionId:t.sessionId});else jumpSession()
+  }
+  function jumpSignal() {
+    for(var i=1;i<=terminals.length;i++){
+      var n=(current+i)%terminals.length, status=signalFor(terminals[n])
+      if(status==="done" || status==="input" || status==="error"){current=n;searchText="";jumpSession();return}
+    }
+    studioMessage="No sessions are waiting."
+  }
+  function signal(json) {
+    var req;try{req=JSON.parse(json)}catch(e){return "error: invalid signal"}
+    if(["working","done","input","error"].indexOf(req.status)<0)return "error: unknown status"
+    var found=false,next=Object.assign({},signalStates)
+    for(var i=0;i<terminals.length;i++){
+      var t=terminals[i]
+      if(String(t.pid)===String(req.pid) || (req.sessionId && t.sessionId===req.sessionId)){
+        next[Workspace.key(t)]=req.status;found=true
+        if(t.sessionId)sessionAction({op:"signal",sessionId:t.sessionId,status:req.status})
+        var address=t.hostAddress || t.address
+        if(address && req.status!=="working")startPulse(Object.assign({},t,{address:address}))
+      }
+    }
+    signalStates=next
+    return found?"ok":"error: session not found"
+  }
+  function refreshEffects(before) {
+    var list=terminals.slice()
+    for(var i=0;i<list.length;i++){
+      list[i]=Object.assign({},list[i],{glass:glassFor(list[i]),matrix:matrixFor(list[i])})
+      if(!historyMuted && before && before[i])histories=Workspace.record(histories,list[i],before[i])
+    }
+    terminals=list
+  }
+  property var comparisonState: null
+  function comparePrevious(on) {
+    if(on){
+      if(comparisonState || !batchPast.length)return
+      comparisonState=terminals.map(function(t){return {key:Workspace.key(t),state:styleState(t)}})
+      var previous=batchPast[batchPast.length-1]
+    }else{
+      if(!comparisonState)return
+      var previous=comparisonState;comparisonState=null
+    }
+    batchMuted=true
+    for(var i=0;i<previous.length;i++)for(var j=0;j<terminals.length;j++)if(Workspace.key(terminals[j])===previous[i].key)applyState(j,previous[i].state)
+    batchMuted=false
+  }
+  function styleState(t) {
+    return {look:t.look,wallpaper:t.wallpaper,glass:glassFor(t),matrix:matrixFor(t)}
+  }
+  function captureBatch() {
+    if(batchMuted)return
+    batchPast=batchPast.concat([terminals.map(function(t){return {key:Workspace.key(t),state:styleState(t)}})]).slice(-30)
+    batchFuture=[]
+  }
+  function applyState(index,state) {
+    var t=terminals[index]
+    restoreSnapshot(index,state)
+    var hosts=t.backend==="tmux"?(t.wallpaperHosts||[]):[t]
+    var g=Object.assign({},glassOverrides),m=Object.assign({},matrixOverrides)
+    for(var h=0;h<hosts.length;h++){
+      if(state.glass)g[Workspace.key(hosts[h])]=state.glass
+      if(state.matrix)m[Workspace.key(hosts[h])]=state.matrix
+    }
+    glassOverrides=g;matrixOverrides=m
+    if(terminals[index].wallpaperReady)sendWallpaper(terminals[index],terminals[index].wallpaper)
+    syncProfile(terminals[index]);saveConfig()
+  }
+  function travelBatch(redo) {
+    var source=redo?batchFuture:batchPast
+    if(!source.length)return
+    var currentState=terminals.map(function(t){return {key:Workspace.key(t),state:styleState(t)}})
+    var snapshot=source[source.length-1]
+    if(redo){batchFuture=source.slice(0,-1);batchPast=batchPast.concat([currentState])}
+    else{batchPast=source.slice(0,-1);batchFuture=batchFuture.concat([currentState])}
+    batchMuted=true
+    for(var i=0;i<snapshot.length;i++)for(var j=0;j<terminals.length;j++)if(Workspace.key(terminals[j])===snapshot[i].key)applyState(j,snapshot[i].state)
+    batchMuted=false
+  }
+  function togglePrivacy() {
+    var next=privacyKeys.slice()
+    for(var i=0;i<actionTargets.length;i++){
+      var key=Workspace.key(terminals[actionTargets[i]]),at=next.indexOf(key)
+      if(at>=0)next.splice(at,1);else next.push(key)
+    }
+    privacyKeys=next;saveConfig()
+    for(var j=0;j<actionTargets.length;j++){var t=terminals[actionTargets[j]];if(t.wallpaperReady)sendWallpaper(t,t.wallpaper)}
+  }
+  function clearPrivacy() {
+    var previous=privacyKeys;privacyKeys=[];saveConfig()
+    for(var i=0;i<terminals.length;i++)if(previous.indexOf(Workspace.key(terminals[i]))>=0 && terminals[i].wallpaperReady)sendWallpaper(terminals[i],terminals[i].wallpaper)
+  }
+  property var readableTargets: []
+  function readableGlass() {
+    if(readabilityWorker.running)return
+    readableTargets=actionTargets.map(function(i){return Workspace.key(terminals[i])})
+    if(!readableTargets.length)return
+    var t=selectedTerm
+    readabilityWorker.command=["python3",pluginDir+"/bin/ombre-readability",t && t.wallpaper?t.wallpaper.path:""]
+    readabilityWorker.running=true
+    studioMessage="Measuring wallpaper brightness…"
+  }
+  function applyReadable(text) {
+    var recommendation;try{recommendation=JSON.parse(text)}catch(e){studioMessage="Could not measure the wallpaper.";return}
+    captureBatch();batchMuted=true
+    for(var i=0;i<terminals.length;i++){
+      if(readableTargets.indexOf(Workspace.key(terminals[i]))<0)continue
+      var state=styleState(terminals[i])
+      state.glass={on:true,color:"smoke",tint:recommendation.tint,blur:recommendation.blur}
+      state.look=Palette.foregroundLook(state.look,recommendation.foreground)
+      if(state.wallpaper)state.wallpaper=Object.assign({},state.wallpaper,{strength:recommendation.strength})
+      applyState(i,state)
+    }
+    batchMuted=false
+    studioMessage="Balanced wallpaper exposure, Glass tint and text brightness. Hold Compare to inspect the change; Undo batch restores it."
+  }
+  Process {
+    id:readabilityWorker
+    stdout:StdioCollector {onStreamFinished:root.applyReadable(text)}
+    onExited:function(code){if(code!==0)root.studioMessage="Wallpaper analysis failed; no changes applied."}
+  }
+  function saveScene(name) {
+    name=Workspace.name(name);if(!name){studioMessage="Enter a scene name.";return}
+    var entries=filteredTerminals.map(function(t){return {key:Workspace.key(t),sessionId:t.sessionId||"",title:t.title,cwd:t.cwd,root:t.root,label:t.label || "",layout:t.layout || "",workspace:t.workspace,hostAddress:t.hostAddress||t.address,x:t.x,y:t.y,w:t.w,h:t.h,state:styleState(t)}})
+    scenes=scenes.filter(function(s){return s.name!==name}).concat([{name:name,entries:entries}])
+    saveConfig();studioMessage="Scene saved: "+name
+  }
+  function deleteScene(name) {scenes=scenes.filter(function(s){return s.name!==name});saveConfig()}
+  function restoreScene(name) {
+    var scene=scenes.filter(function(s){return s.name===name})[0];if(!scene)return
+    captureBatch();batchMuted=true;var restored=0,missing=0
+    for(var i=0;i<scene.entries.length;i++){
+      var entry=scene.entries[i],index=-1
+      for(var j=0;j<terminals.length;j++)if(Workspace.key(terminals[j])===entry.key){index=j;break}
+      if(index<0){missing++;continue}
+      applyState(index,entry.state);restored++
+      if(terminals[index].sessionId && entry.label)sessionAction({op:"label",sessionId:terminals[index].sessionId,label:entry.label})
+      var hosts=terminals[index].backend==="tmux"?(terminals[index].wallpaperHosts||[]):[terminals[index]]
+      for(var wh=0;wh<hosts.length;wh++)sessionAction({op:"window-layout",pid:hosts[wh].pid,started:hosts[wh].started,workspace:entry.workspace,x:entry.x,y:entry.y,w:entry.w,h:entry.h})
+      if(terminals[index].sessionId)sessionAction({op:"restore-layout",sessionId:terminals[index].sessionId,layout:entry.layout,hostAddress:terminals[index].hostAddress,workspace:entry.workspace,x:entry.x,y:entry.y,w:entry.w,h:entry.h})
+    }
+    batchMuted=false;studioMessage="Restored "+restored+" live sessions; "+missing+" ended sessions were left untouched."
+  }
+  function syncProfile(t) {
+    if(t && t.backend==="tmux" && followSessions) {
+      var profile=styleState(t)
+      if(JSON.stringify(t.profile)!==JSON.stringify(profile))sessionAction({op:"profile",sessionId:t.sessionId,profile:profile})
+    }
+  }
+  property var matrixOverrides: ({})
+  readonly property var selectedMatrix: matrixFor(selectedTerm)
+  function matrixFor(term) {
+    var host = term && term.backend === "tmux" ? (term.wallpaperHosts || [])[0] : term
+    return matrixOverrides[Workspace.key(host)] || {on:false,size:20,blur:1,opacity:0.25,speed:1,density:0.55,paused:false}
+  }
+  function setMatrix(json) {
+    var effectBefore=terminals.map(function(t){return styleState(t)})
+    root.captureBatch()
+    var patch
+    try { patch = typeof json === "string" ? JSON.parse(json) : json } catch(e) { return "error: invalid Matrix settings" }
+    var next = Object.assign({}, matrixOverrides)
+    for (var i=0;i<actionTargets.length;i++) {
+      var t=terminals[actionTargets[i]]
+      var hosts=t.backend === "tmux" ? (t.wallpaperHosts || []) : [t]
+      for (var h=0;h<hosts.length;h++) {
+        if (!hosts[h].wallpaperReady || hosts[h].backend === "omaguake") continue
+        var m=Object.assign({},matrixFor(hosts[h]),patch)
+        m.size=Palette.glassLevel(m.size,64,20);m.size=Math.max(8,m.size)
+        m.blur=Palette.glassLevel(m.blur,12,1)
+        m.opacity=Math.max(0,Math.min(1,Number(m.opacity)||0))
+        m.speed=Math.max(0.1,Math.min(4,Number(m.speed)||1))
+        m.density=Math.max(0.05,Math.min(1,Number(m.density)||0.55))
+        next[Workspace.key(hosts[h])]=m
+      }
+    }
+    matrixOverrides=next;refreshEffects(effectBefore);saveConfig()
+    for(var j=0;j<actionTargets.length;j++){var term=terminals[actionTargets[j]];if(term.wallpaperReady)sendWallpaper(term,term.wallpaper);syncProfile(term)}
+    return "ok"
+  }
+  function renderToken(term) {
+    for(var pi=0;pi<terminals.length;pi++){
+      var pt=terminals[pi]
+      if(privacyKeys.indexOf(Workspace.key(pt))<0)continue
+      if(Workspace.key(pt)===Workspace.key(term) || (pt.wallpaperHosts||[]).some(function(h){return Workspace.key(h)===Workspace.key(term)}))return "private"
+    }
+    var shadow=shadowVariant(term), m=matrixFor(term)
+    if (!m.on) return shadow
+    return "matrix:"+[m.size,m.blur,m.opacity,m.speed,m.density,m.paused?1:0,glassFor(term).on && term.wallpaper?1:0].join(":")+"~"+shadow
+  }
   property var glassOverrides: ({})
   readonly property var selectedGlass: glassFor(selectedTerm)
 
@@ -85,6 +293,8 @@ Item {
   }
 
   function changeGlass(patch) {
+    var effectBefore=terminals.map(function(t){return styleState(t)})
+    root.captureBatch()
     var next = Object.assign({}, glassOverrides)
     var targets = actionTargets
     for (var i = 0; i < targets.length; i++) {
@@ -96,10 +306,12 @@ Item {
       }
     }
     glassOverrides = next
+    refreshEffects(effectBefore)
     saveConfig()
     for (var j = 0; j < targets.length; j++) {
       var t = terminals[targets[j]]
       if (t.wallpaperReady) sendWallpaper(t, t.wallpaper)
+      syncProfile(t)
     }
     return "ok"
   }
@@ -284,7 +496,7 @@ Item {
     if (request.sessions === true) root.searchText = String(request.query || "")
     root.openingWorkspace = Hyprland.focusedWorkspace ? String(Hyprland.focusedWorkspace.name || Hyprland.focusedWorkspace.id) : ""
     root.markedKeys = []
-    root.view = "style"
+    root.view = request.studio ? "studio" : "style"
     root.opened = true
     root.focusOnScan = true
     root.hoverText = ""
@@ -306,6 +518,7 @@ Item {
   }
 
   function close() {
+    root.comparePrevious(false)
     root.endPreview()
     root.browsing = false
     root.opened = false
@@ -347,6 +560,7 @@ Item {
       current: root.current,
       borders: root.borders,
       version: root.pluginVersion,
+      studio:{focus:root.focusMode,private:root.privacyKeys.length,scenes:root.scenes.length,matrix:root.selectedMatrix},
       selectedCount: root.actionTargets.length,
       filteredCount: root.filteredTerminals.length,
       terminals: root.terminals.map(function (t) {
@@ -698,6 +912,15 @@ Item {
     root.historyMuted = true
     root.commit(index, state.look, true)
     if (root.terminals[index].wallpaperReady) root.setWallpaper(index, state.wallpaper)
+    var t=root.terminals[index], hosts=t.backend==="tmux"?(t.wallpaperHosts||[]):[t]
+    var g=Object.assign({},root.glassOverrides),m=Object.assign({},root.matrixOverrides)
+    for(var h=0;h<hosts.length;h++){
+      if(state.glass)g[Workspace.key(hosts[h])]=state.glass
+      if(state.matrix)m[Workspace.key(hosts[h])]=state.matrix
+    }
+    root.glassOverrides=g;root.matrixOverrides=m;root.refreshEffects(null)
+    if(t.wallpaperReady)root.sendWallpaper(root.terminals[index],root.terminals[index].wallpaper)
+    root.saveConfig();root.syncProfile(root.terminals[index])
     root.historyMuted = muted
   }
   function travelHistory(index, direction) {
@@ -709,6 +932,7 @@ Item {
     root.restoreSnapshot(index, result.state)
   }
   function applyLookTargets(look) {
+    root.captureBatch()
     root.endPreview()
     var targets = root.actionTargets.slice()
     for (var i = 0; i < targets.length; i++) root.commitWithWallpaper(targets[i], look)
@@ -729,6 +953,7 @@ Item {
     for (var i = 0; i < targets.length; i++) root.commit(targets[i], null)
   }
   function applyWallpaperTargets(wallpaper) {
+    root.captureBatch()
     root.endPreview()
     var targets = root.actionTargets.slice(), skipped = 0
     for (var i = 0; i < targets.length; i++) {
@@ -745,7 +970,7 @@ Item {
     var at = Workspace.find(root.savedLooks, name)
     if (at >= 0 && !replace) { root.libraryMessage = "That name is already saved. Use Update on its card to replace it."; return false }
     if (at < 0 && root.savedLooks.length >= 200) { root.libraryMessage = "The library holds up to 200 looks. Remove one before saving another."; return false }
-    var state = Workspace.snapshot(term), next = root.savedLooks.slice()
+    var state = Workspace.snapshot(root.styleState(term)), next = root.savedLooks.slice()
     var item = {name: at >= 0 ? next[at].name : name, look: state.look, wallpaper: state.wallpaper, favorite: at >= 0 && next[at].favorite}
     if (at >= 0) next[at] = item
     else next.push(item)
@@ -808,7 +1033,7 @@ Item {
     var before = Workspace.snapshot(root.terminals[index]), muted = root.historyMuted
     root.historyMuted = true
     root.commit(index, scope === "all" ? saved.look : Palette.layerLook(root.terminals[index].look, saved.look, scope), true)
-    if (scope !== "text" && root.terminals[index].wallpaperReady) root.setWallpaper(index, saved.wallpaper)
+    if (scope !== "text" && root.terminals[index].wallpaperReady) root.restoreSnapshot(index,Object.assign({},saved,{look:root.terminals[index].look}))
     root.historyMuted = muted
     root.recordChange(index, before)
   }
@@ -851,7 +1076,7 @@ Item {
     var t = root.selectedTerm
     if (!t) return
     root.endPreview()
-    if (t.sessionId) root.sessionAction({op: "focus", sessionId: t.sessionId})
+    if (t.sessionId) root.sessionAction({op: "focus", sessionId: t.sessionId, hostAddress:t.hostAddress})
     else {
       root.dismiss()
       Hyprland.dispatch("focuswindow address:0x" + t.address)
@@ -920,6 +1145,9 @@ Item {
         list[i].wallpaper = k.wallpaper
       }
     }
+    for(var fx=0;fx<list.length;fx++){
+      list[fx].glass=root.glassFor(list[fx]);list[fx].matrix=root.matrixFor(list[fx])
+    }
     return list
   }
 
@@ -928,6 +1156,20 @@ Item {
     if (!list) return
     var previous = Workspace.key(root.selectedTerm)
     root.terminals = list
+    if(root.followSessions) {
+      var followed=Object.assign({},root.followSeen)
+      var wasMuted=root.batchMuted;root.batchMuted=true
+      for(var fi=0;fi<list.length;fi++){
+        var ft=list[fi]
+        if(ft.backend!=="tmux" || !ft.profile || !ft.displayed || !ft.wallpaperReady)continue
+        var fingerprint=JSON.stringify([ft.wallpaperHosts.map(function(h){return Workspace.key(h)}),ft.profile])
+        var hostKeys=ft.wallpaperHosts.map(function(h){return Workspace.key(h)})
+        if(hostKeys.every(function(k){return followed[k]===ft.sessionId+fingerprint}))continue
+        for(var hk=0;hk<hostKeys.length;hk++)followed[hostKeys[hk]]=ft.sessionId+fingerprint
+        root.applyState(fi,ft.profile)
+      }
+      root.followSeen=followed;root.batchMuted=wasMuted
+    }
     root.histories = Workspace.prune(root.histories, list)
     root.markedKeys = root.markedKeys.filter(function (k) { return list.some(function (t) { return Workspace.key(t) === k }) })
     for (var pi = 0; pi < list.length; pi++) if (Workspace.key(list[pi]) === previous) root.current = pi
@@ -939,7 +1181,7 @@ Item {
     var waiting = root.pendingPulses
     root.pendingPulses = []
     for (var w = 0; w < waiting.length; w++) {
-      for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w]) root.startPulse(list[t])
+      for (var t = 0; t < list.length; t++) if (list[t].address === waiting[w] || list[t].hostAddress === waiting[w]) root.startPulse(Object.assign({},list[t],{address:waiting[w]}))
     }
     var muted = root.historyMuted
     root.historyMuted = true
@@ -1285,6 +1527,7 @@ Item {
     var known = Object.assign({}, root.known)
     known[term.pty] = { pid: term.pid, identity: Workspace.key(term), look: term.look, wallpaper: term.wallpaper }
     root.known = known
+    root.syncProfile(term)
   }
 
   function update(index, patch) {
@@ -1366,7 +1609,7 @@ Item {
       return
     }
     root.send("ghostty " + term.pid + " " + (term.confDir || root.runtimeDir + "/ghostty/") + " "
-      + root.shadowVariant(term) + " " + Palette.ghosttyColors(term.look, root.themeBackground) + " " + (w ? w.strength + " " + w.blur + " " + w.path : "- 0 -"))
+      + root.renderToken(term) + " " + Palette.ghosttyColors(term.look, root.themeBackground) + " " + (w ? w.strength + " " + w.blur + " " + w.path : "- 0 -"))
     // Re-send the look once the reload settles, in case it reset the colors.
     if (root.reshowPtys.indexOf(term.pty) < 0) root.reshowPtys = root.reshowPtys.concat([term.pty])
     reshowLater.restart()
@@ -1812,7 +2055,7 @@ Item {
     root.configDirty = false
     configWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$(dirname "$1")" && tmp=$(mktemp "$1.XXXXXX") && { printf "%s\\n" "$2" > "$tmp" && mv -f "$tmp" "$1"; }',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, glassOverrides: root.glassOverrides, glass: root.glass, glassColor: root.glassColor, glassTint: root.glassTint, glassBlur: root.glassBlur, strength: root.strength, blur: root.blur,
+        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, privacyKeys: root.privacyKeys, scenes: root.scenes, followSessions: root.followSessions, matrixOverrides: root.matrixOverrides, glassOverrides: root.glassOverrides, glass: root.glass, glassColor: root.glassColor, glassTint: root.glassTint, glassBlur: root.glassBlur, strength: root.strength, blur: root.blur,
         hiddenSources: root.hiddenSources,
         imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
@@ -1837,6 +2080,10 @@ Item {
       if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && typeof cfg.glass === "boolean") root.glass = cfg.glass
+      if(cfg && Array.isArray(cfg.privacyKeys))root.privacyKeys=cfg.privacyKeys
+      if(cfg && Array.isArray(cfg.scenes))root.scenes=cfg.scenes
+      if(cfg && typeof cfg.followSessions==="boolean")root.followSessions=cfg.followSessions
+      if (cfg && cfg.matrixOverrides && typeof cfg.matrixOverrides === "object") root.matrixOverrides = cfg.matrixOverrides
       if (cfg && cfg.glassOverrides && typeof cfg.glassOverrides === "object") root.glassOverrides = cfg.glassOverrides
       if (cfg && Palette.glassColor(cfg.glassColor)) root.glassColor = Palette.glassColor(cfg.glassColor)
       if (cfg && typeof cfg.glassTint === "number") root.glassTint = Palette.glassLevel(cfg.glassTint, 100, Palette.GLASS_TINT)
@@ -1981,11 +2228,13 @@ Item {
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
     + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; rest=${rest#* }; blur=${rest%% *}; path=${rest#* }\n'
     + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
+    + "      matrix=; case $shadow in matrix:*) matrix=${shadow%%~*}; shadow=${shadow#*~} ;; esac\n"
     + '      glass=; case $shadow in glass*)\n'
     + '        glass=${shadow%%-*}; case $shadow in *-dark) shadow=dark ;; *-light) shadow=light ;; *) shadow=- ;; esac\n'
     + '        ;;\n'
     + '      esac\n'
     + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
+    + "      if [ -n \"$matrix\" ]; then matrix=$(python3 -I \"$plug/bin/ombre-matrix\" --dir \"$cdir\" --pid \"$key\" --settings \"${matrix#matrix:}\") || continue; fi\n"
     + '      if [ -n "$glass" ]; then\n'
     + '        old=$IFS; IFS=:; set -- $glass; IFS=$old; glass=\n'
     + '        if [ "$strength" != "-" ]; then glass=$(python3 -I "$plug/bin/ombre-glass" --dir "$cdir" --pid "$key" --color "${2:-000000}" --tint "${3:-86}" --blur "${4:-36}") || glass=; fi\n'
@@ -1996,16 +2245,19 @@ Item {
     + '      {\n'
     + '        echo "app-notifications = no-config-reload"\n'
     + '        if [ "$colors" != "-" ]; then printf "%s\\n" "$colors" | tr ";" "\\n"; fi\n'
+    + "        if [ -n \"$matrix\" ]; then printf 'custom-shader = \"%s\"\\n' \"$matrix\"; echo \"background-opacity = 0.5\"; echo \"background-opacity-cells = true\"; fi\n"
     // Glass runs first: it reads the cell layers by alpha and hands an opaque frame on.
     + '        if [ -n "$glass" ] && [ "$strength" != "-" ]; then\n'
     + '          printf "custom-shader = \\"%s\\"\\n" "$glass"\n'
     + '          echo "background-opacity = 0.5"\n'
     + '          echo "background-opacity-cells = true"\n'
     + '        else glass=; fi\n'
+    + "        if [ \"$shadow\" = private ]; then printf 'custom-shader = \"%s/shaders/private.glsl\"\\n' \"$plug\"; echo \"custom-shader-animation = false\"; fi\n"
     + '        case $shadow in dark|light)\n'
     + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow" ;;\n'
     + '        esac\n'
     + '        case $glass$shadow in /*|dark|light) echo "custom-shader-animation = false" ;; esac\n'
+    + "        if [ -n \"$matrix\" ]; then echo \"custom-shader-animation = always\"; fi\n"
     + '        if [ "$strength" != "-" ]; then\n'
     + '          printf "background-image = \\"%s\\"\\n" "$path"\n'
     + '          echo "background-image-fit = cover"\n'
@@ -2055,7 +2307,7 @@ Item {
     }
   }
   Timer {
-    interval: root.opened ? 3000 : 10000
+    interval: root.privacyKeys.length || root.focusMode ? 600 : root.opened ? 3000 : 10000
     running: root.opened || root.projects.length > 0 || root.newDefault.mode !== "none"
     repeat: true
     onTriggered: root.scan()
@@ -2190,7 +2442,7 @@ Item {
       var data = String(event.data || "").trim()
       switch (event.name) {
       case "configreloaded": borderProbe.running = true; reapplyLater.restart(); break
-      case "activewindowv2": root.activeAddress = data; root.stopPulse(data); break
+      case "activewindowv2": root.activeAddress = data; root.stopPulse(data); if(root.focusMode || root.privacyKeys.length)root.scan(); break
       case "closewindow":
         if (root.opened) root.scan()
         root.dropPulse(data)
@@ -2206,7 +2458,11 @@ Item {
           root.agentStates = states
         }
         break
-      case "urgent": root.requestPulse(data); break
+      case "urgent":
+        root.requestPulse(data)
+        var signals=Object.assign({},root.signalStates)
+        for(var si=0;si<root.terminals.length;si++){var st=root.terminals[si];if(st.address===data || st.hostAddress===data)signals[Workspace.key(st)]="input"}
+        root.signalStates=signals;break
       case "openwindow":
         if (root.solid) solidLater.restart()
         // A window can take seconds to start its shell; keep looking until it
@@ -2677,6 +2933,30 @@ Item {
     }
   }
 
+  Variants {
+    model: Quickshell.screens
+    delegate: PanelWindow {
+      required property var modelData
+      screen: modelData
+      visible: root.privacyKeys.length > 0
+      anchors {top:true;bottom:true;left:true;right:true}
+      color:"transparent";exclusionMode:ExclusionMode.Ignore
+      WlrLayershell.namespace:"omarchy-ombre-privacy"
+      WlrLayershell.layer:WlrLayer.Overlay
+      WlrLayershell.keyboardFocus:WlrKeyboardFocus.None
+      mask: Region {}
+      Repeater {
+        model: root.terminals.filter(function(t){return root.privacyKeys.indexOf(Workspace.key(t))>=0 && t.visible && t.monitor===modelData.name})
+        delegate: Rectangle {
+          required property var modelData
+          x:modelData.lx;y:modelData.ly;width:modelData.w;height:modelData.h
+          color:"#10131a";radius:8
+          Text {anchors.centerIn:parent;text:"Private terminal · reveal in Ombre Studio";color:"#a4b0bf"}
+        }
+      }
+    }
+  }
+
   // While the picker is open every monitor dims, except a cut-out around the
   // selected terminal with a ring and its name, so you can see which real
   // window a card is. It sits on the Top layer, under the picker's Overlay.
@@ -2687,7 +2967,7 @@ Item {
       id: spot
       required property var modelData
       screen: modelData
-      visible: root.opened
+      visible: root.opened || root.focusMode
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore
@@ -2695,7 +2975,7 @@ Item {
       WlrLayershell.layer: WlrLayer.Top
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
-      readonly property var term: root.selectedTerm
+      readonly property var term: root.opened ? root.selectedTerm : (root.terminals.filter(function(t){return t.address === root.activeAddress || t.hostAddress === root.activeAddress})[0] || null)
       readonly property bool here: term !== null && term.visible === true && term.monitor === modelData.name
       readonly property int gap: Style.space(5)
       readonly property color scrim: Commons.Color.menu.scrim
@@ -2950,6 +3230,11 @@ Item {
             }
             TextButton {
               anchors.verticalCenter: parent.verticalCenter
+              label: root.view === "studio" ? "← Styling" : "Studio"
+              onActivated: root.view = root.view === "studio" ? "style" : "studio"
+            }
+            TextButton {
+              anchors.verticalCenter: parent.verticalCenter
               label: root.view === "settings" ? "← Back to styling" : "󰒓  Settings"
               chosen: root.view === "settings"
               Accessible.name: root.view === "settings" ? "Back to styling" : "Settings"
@@ -3009,6 +3294,8 @@ Item {
           anchors.right: parent.right
 
           readonly property int sideWidth: Math.min(Style.space(340), Math.round(width * 0.32))
+
+          Studio { anchors.fill: parent; visible: root.view === "studio"; controller: root }
 
           // ======== Styling ========
           Item {

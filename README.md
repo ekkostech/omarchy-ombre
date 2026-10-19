@@ -366,3 +366,43 @@ glass shader and text shadows are not implemented by this bridge.
 Attached tmux entries forward wallpaper, strength and blur controls to their wallpaper-ready Ghostty host windows. The wallpaper belongs to the entire host window, shared by its panes and sessions. Detached sessions and hosts opened without Ombre wallpaper configuration cannot render one. Pane colors remain independent.
 
 Glass controls apply to selected windows (or explicitly selected batches). Tmux panes share their host window’s Glass. Tint at 100% covers the image completely; low wallpaper strength also hides detail.
+
+## Studio (2.3)
+
+Open **Studio** in the picker, or run `ombre studio`. Choose a terminal first.
+Controls apply to that terminal or the explicitly marked batch.
+
+- **Matrix:** procedural animated rain inside Ghostty, including tmux hosts. Size
+  is 8–64 pixels, blur 0–12, opacity 0–1, speed 0.1–4 and density 0.05–1.
+  Pause displays a still rain frame; disable restores the normal background.
+  Text is excluded from the rain blur. Matrix composes with wallpaper and Glass.
+  Omaguake currently keeps its static wallpaper renderer.
+- **Follow me:** pane-local profiles travel with live tmux sessions. The active
+  pane determines the shared host-window background when switching sessions or
+  reattaching; other pane palettes remain independent.
+- **Focus:** dims the desktop outside the active terminal after the picker closes.
+  Toggle it off in Studio to restore the view.
+- **Privacy:** Ghostty's renderer is blanked, including direct window capture.
+  Other terminal types have a desktop curtain; direct application sharing can
+  bypass that curtain. Reveal all restores the previous appearance. Jobs continue.
+- **Signals:** existing spinner/title and bell detection is complemented by
+  `ombre signal working|done|input|error PANE_PID` for agent hooks. Explicit
+  signals appear in the session map and can be jumped to. A running process alone
+  is not treated as evidence that an agent has finished or needs input.
+- **Scenes:** save the filtered sessions' names, working-directory context,
+  appearance, workspace and tmux layout. Restore reuses living sessions, moves
+  their hosts to recorded workspaces and restores floating-window geometry.
+  The compositor arranges tiled windows. Ended jobs are reported, never restarted
+  or re-created implicitly. Selecting a detached live tmux session attaches it in
+  a new Ghostty window.
+- **Readable Glass:** samples wallpaper brightness and adjusts exposure, smoke
+  tint, blur and foreground for a readable starting point. It is a recommendation,
+  not a contrast guarantee for every application's own ANSI colors.
+- **History:** batch undo/redo and hold-to-compare include Glass and Matrix.
+  Saved looks and individual undo/redo retain those effects too.
+
+CLI Matrix changes target the selected picker terminal:
+`ombre matrix on`, `ombre matrix size 28`, `ombre matrix blur 2`,
+`ombre matrix opacity 0.3`, `ombre matrix speed 0.8`,
+`ombre matrix density 0.5`, `ombre matrix pause`, `ombre matrix off`.
+Animated shaders consume GPU time; pause or disable them when desired.

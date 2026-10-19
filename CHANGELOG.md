@@ -1,3 +1,13 @@
+## 2.3.0
+
+- Add Studio: animated Matrix rain with size, blur, opacity, speed, density and pause.
+- Follow tmux session looks, wallpaper, Glass and Matrix across attached Ghostty hosts.
+- Add focus spotlight, privacy curtains and Ghostty output privacy.
+- Add session map, explicit working/done/input/error signals and jump-to-next signal.
+- Save project scenes and restore live session styles, workspace placement, floating geometry and tmux layouts.
+- Balance Glass and text from sampled wallpaper brightness.
+- Add batch undo/redo and hold-to-compare; include Glass and Matrix in saved looks and individual history.
+
 ## 2.2.2
 
 - Restore tmux selector spotlight from host window geometry.

@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+import argparse, hashlib, math, os, re, tempfile
+from pathlib import Path
+def render(values):
+    limits = {'size':(8,64), 'blur':(0,12), 'opacity':(0,1), 'speed':(0.1,4), 'density':(0.05,1), 'paused':(0,1), 'keep_alpha':(0,1)}
+    text=(Path(__file__).resolve().parent.parent/'shaders/matrix.glsl').read_text()
+    if len(values)!=len(limits): raise ValueError('Invalid Matrix settings')
+    for (key,(low,high)),value in zip(limits.items(),values):
+        number=float(value)
+        if not math.isfinite(number) or not low<=number<=high: raise ValueError('Invalid '+key)
+        text=re.sub(r'^const float '+key.upper()+r' = .*$', 'const float '+key.upper()+' = '+format(number,'.5f')+';',text,flags=re.M)
+    return text
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--dir',required=True);p.add_argument('--pid',required=True);p.add_argument('--settings',required=True);a=p.parse_args()
+    folder=Path(a.dir)
+    if folder.is_symlink() or not folder.is_dir() or folder.stat().st_uid!=os.getuid() or not re.fullmatch(r'[0-9]+',a.pid): raise ValueError('Unsafe shader destination')
+    text=render(a.settings.split(':'))
+    target=folder/(a.pid+'-matrix-'+hashlib.sha256(text.encode()).hexdigest()[:12]+'.glsl')
+    if not target.exists():
+        fd,tmp=tempfile.mkstemp(prefix='.matrix-',dir=folder)
+        with os.fdopen(fd,'w') as f:f.write(text)
+        os.replace(tmp,target)
+    print(target)
+if __name__=='__main__': main()

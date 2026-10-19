@@ -4,8 +4,10 @@
 // Pure feature state: no filesystem, compositor or terminal writes.
 function key(term) { return term ? (term.sessionId || String(term.pid) + ":" + term.pty + ":" + term.address + ":" + (term.started || "")) : ""; }
 function snapshot(term) {
-  return JSON.parse(JSON.stringify({ look: Palette.normalizeLook(term && term.look),
-    wallpaper: Palette.normalizeWallpaper(term && term.wallpaper) }));
+  var state = {look: Palette.normalizeLook(term && term.look), wallpaper: Palette.normalizeWallpaper(term && term.wallpaper)};
+  if(term && term.glass) state.glass = term.glass;
+  if(term && term.matrix) state.matrix = term.matrix;
+  return JSON.parse(JSON.stringify(state));
 }
 function same(a, b) { return JSON.stringify(snapshot(a)) === JSON.stringify(snapshot(b)); }
 function name(value) {
@@ -22,7 +24,7 @@ function library(values) {
     if (v.look && !Palette.normalizeLook(v.look)) continue;
     if (v.wallpaper && !Palette.normalizeWallpaper(v.wallpaper)) continue;
     var state = snapshot(v);
-    out.push({name: n, look: state.look, wallpaper: state.wallpaper, favorite: v.favorite === true});
+    out.push(Object.assign({}, state, {name:n, favorite:v.favorite === true}));
     seen[n.toLowerCase()] = true;
   }
   return out;

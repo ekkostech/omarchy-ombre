@@ -14,7 +14,7 @@ import sys
 
 FIELDS = ['pane_id', 'pane_pid', 'pane_tty', 'session_id', 'session_name',
           'window_id', 'window_name', 'pane_current_path', 'pane_current_command',
-          'pane_active', 'window_active', '@ombre-label', '@ombre-look', '@ombre-wallpaper', '@ombre-render-wallpaper']
+          'pane_active', 'window_active', '@ombre-label', '@ombre-look', '@ombre-wallpaper', '@ombre-render-wallpaper', '@ombre-profile', '@ombre-signal', 'pane_title', 'window_layout']
 
 
 def run(args, required=False):
@@ -166,6 +166,10 @@ def discover():
                 render_wp = json.loads(d['@ombre-render-wallpaper'] or 'null')
             except ValueError:
                 wp = render_wp = None
+            try:
+                profile = json.loads(d['@ombre-profile'] or 'null')
+            except ValueError:
+                profile = None
             result.append(dict(sessionId=identity, backend='omaguake' if oma else 'tmux',
                 socket=sock, pane=d['pane_id'], session=d['session_id'], sessionName=d['session_name'],
                 window=d['window_id'], pid=d['pane_pid'], pty=d['pane_tty'][5:],
@@ -178,7 +182,8 @@ def discover():
                 cls='Omaguake' if oma else 'tmux', w=16, h=9, visible=bool(parents),
                 wallpaperReady=bool(oma and renderer), ghostty=False, confDir='', wallpaper=wp, look=look, renderWallpaper=render_wp,
                 clientPtys=[c[1].removeprefix('/dev/') for c in parents],
-                attached=bool(parents)))
+                attached=bool(parents), displayed=d['pane_active']=='1' and d['window_active']=='1',
+                profile=profile, signal=d['@ombre-signal'], paneTitle=d['pane_title'], layout=d['window_layout']))
     return result
 
 
@@ -188,7 +193,32 @@ def checked_color(v):
     return v
 
 
+def restore_host(req):
+    pid=str(req.get('pid',''))
+    stamp=str(req.get('started',''))
+    if not pid.isdigit() or not stamp or process_stamp(pid)!=stamp:
+        raise ValueError('Window identity changed')
+    windows=json.loads(run(['hyprctl','-j','clients']) or '[]')
+    host=next((w for w in windows if str(w.get('pid'))==pid),None)
+    if not host: raise ValueError('Window ended')
+    address=str(host.get('address','')).removeprefix('0x')
+    workspace=str(req.get('workspace',''))
+    if not re.fullmatch(r'[0-9a-fA-F]+',address) or not re.fullmatch(r'[a-zA-Z0-9:_-]+',workspace):
+        raise ValueError('Invalid window layout')
+    selector='window="address:0x'+address+'"'
+    run(['hyprctl','dispatch','hl.dsp.window.move({'+selector+',workspace="'+workspace+'",follow=false})'],True)
+    if host.get('floating'):
+        values=[int(req[k]) for k in ('x','y','w','h')]
+        if not all(-100000<v<100000 for v in values) or min(values[2:])<50: raise ValueError('Invalid geometry')
+        x,y,w,h=values
+        run(['hyprctl','dispatch',f'hl.dsp.window.move({{{selector},x={x},y={y},relative=false}})'],True)
+        run(['hyprctl','dispatch',f'hl.dsp.window.resize({{{selector},x={w},y={h},relative=false}})'],True)
+
+
 def action(req):
+    if req.get("op")=="window-layout":
+        restore_host(req)
+        return
     # Resolve a fresh identity on every operation, including server start time.
     sessions = discover()
     term = next((t for t in sessions if t['sessionId'] == req.get('sessionId')), None)
@@ -196,7 +226,36 @@ def action(req):
         raise ValueError('Session has ended; refresh the list')
     sock, pane = term['socket'], term['pane']
     op = req.get('op')
-    if op == 'label':
+    if op == 'profile':
+        profile = req.get('profile')
+        if not isinstance(profile, dict) or len(json.dumps(profile)) > 24000:
+            raise ValueError('Invalid session profile')
+        allowed = {key: profile[key] for key in ('look', 'wallpaper', 'glass', 'matrix') if key in profile}
+        if allowed.get('wallpaper'): allowed['wallpaper'] = wallpaper(allowed['wallpaper'])
+        tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-profile', json.dumps(allowed), required=True)
+    elif op == 'signal':
+        status = req.get('status')
+        if status not in ('working','done','input','error'): raise ValueError('Unknown signal')
+        tmux(sock, 'set-option', '-p', '-t', pane, '@ombre-signal', status, required=True)
+    elif op == 'restore-layout':
+        layout=req.get('layout', '')
+        if layout:
+            if not isinstance(layout,str) or len(layout)>8000 or not re.fullmatch(r'[0-9a-fA-Fx,{}\[\]-]+',layout):
+                raise ValueError('Invalid tmux layout')
+            tmux(sock,'select-layout','-t',term['window'],layout,required=True)
+        address=req.get('hostAddress') or term['hostAddress']
+        workspace=str(req.get('workspace',''))
+        if address and re.fullmatch(r'[0-9a-fA-F]+',address) and re.fullmatch(r'[a-zA-Z0-9:_-]+',workspace):
+            live=json.loads(run(['hyprctl','-j','clients']) or '[]')
+            if not any(str(w.get('address','')).removeprefix('0x')==address for w in live):
+                raise ValueError('Host window ended')
+            expression='hl.dsp.window.move({window="address:0x'+address+'",workspace="'+workspace+'",follow=false})'
+            run(['hyprctl','dispatch',expression],True)
+    elif op == 'attach':
+        subprocess.Popen(['ghostty','--gtk-single-instance=false','--working-directory='+term['cwd'],
+                          '-e','tmux','-S',sock,'attach-session','-t',term['session']],
+                         stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+    elif op == 'label':
         label = req.get('label', '')
         if not isinstance(label, str) or len(label) > 64 or any(ord(c) < 32 or ord(c) == 127 for c in label):
             raise ValueError('Label must be at most 64 characters without control characters')
@@ -266,8 +325,10 @@ def action(req):
                 raise ValueError('Omaguake tab is detached; open Omaguake to restore it')
             run(['omarchy-shell', 'omaguake', 'show'], True)
             run(['omarchy-shell', 'omaguake', 'selectTab', str(tabs.index(tab))], True)
-        elif term['hostAddress']:
-            run(['hyprctl', 'dispatch', 'focuswindow', 'address:0x' + term['hostAddress']], True)
+        elif req.get('hostAddress') or term['hostAddress']:
+            address=req.get('hostAddress') or term['hostAddress']
+            if not re.fullmatch(r'[0-9a-fA-F]+',address): raise ValueError('Invalid host address')
+            run(['hyprctl', 'dispatch', 'hl.dsp.focus({window="address:0x'+address+'"})'], True)
         else:
             raise ValueError('Session is detached; attach it with tmux before switching')
     else:

@@ -71,6 +71,20 @@ ShellRoot {
    picker.sendWallpaper(attached,null)
    check(picker.writes[picker.writes.length-1].endsWith("- 0 -"),"reset not forwarded")
    picker.projects=[]
+   picker.terminals=[Object.assign({},attached,{title:"Matrix host"}),b];picker.current=0;picker.searchText="";picker.workspaceOnly=false;picker.markedKeys=[]
+   picker.setMatrix({on:true,size:28,blur:3,opacity:0.4})
+   check(picker.matrixFor(picker.terminals[0]).size===28,"Matrix setting not scoped to host")
+   check(!picker.matrixFor(b).on,"Matrix changed unrelated terminal")
+   check(picker.renderToken(host).indexOf("matrix:28:3:0.4")===0,"Matrix render token lost controls")
+   picker.travelBatch(false)
+   check(!picker.matrixFor(picker.terminals[0]).on,"batch undo lost Matrix state")
+   picker.travelBatch(true)
+   check(picker.matrixFor(picker.terminals[0]).on,"batch redo lost Matrix state")
+   picker.saveScene("Test scene")
+   check(picker.scenes.length===1 && picker.scenes[0].entries[0].state.matrix.on,"scene lost effects")
+   picker.deleteScene("Test scene")
+   picker.togglePrivacy();check(picker.privacyKeys.length===1,"privacy target missing")
+   picker.togglePrivacy();check(picker.privacyKeys.length===0,"privacy did not restore")
    console.log("OMBRE_SESSIONS_QT_PASS")
    Qt.quit()
   }

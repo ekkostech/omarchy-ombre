@@ -31,6 +31,19 @@ class SessionsTest(unittest.TestCase):
     def panes(self):
         return adapter.discover()
 
+    def test_profiles_and_signals_are_pane_local(self):
+        a,b=self.panes()
+        profile={'look':None,'wallpaper':None,'glass':{'on':True,'tint':55},'matrix':{'on':True,'size':24}}
+        adapter.action({'op':'profile','sessionId':a['sessionId'],'profile':profile})
+        adapter.action({'op':'signal','sessionId':a['sessionId'],'status':'input'})
+        after={p['pane']:p for p in self.panes()}
+        self.assertEqual(after[a['pane']]['profile'],profile)
+        self.assertEqual(after[a['pane']]['signal'],'input')
+        self.assertIsNone(after[b['pane']]['profile'])
+        self.assertEqual(after[b['pane']]['signal'],'')
+        with self.assertRaises(ValueError):
+            adapter.action({'op':'signal','sessionId':a['sessionId'],'status':'guess'})
+
     def test_identity_labels_and_pane_isolation(self):
         a, b = self.panes()
         self.assertEqual(a['backend'], 'omaguake')
