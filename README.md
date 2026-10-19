@@ -364,3 +364,5 @@ glass shader and text shadows are not implemented by this bridge.
 ### Tmux wallpapers (2.2.1)
 
 Attached tmux entries forward wallpaper, strength and blur controls to their wallpaper-ready Ghostty host windows. The wallpaper belongs to the entire host window, shared by its panes and sessions. Detached sessions and hosts opened without Ombre wallpaper configuration cannot render one. Pane colors remain independent.
+
+Glass controls apply to selected windows (or explicitly selected batches). Tmux panes share their host window’s Glass. Tint at 100% covers the image completely; low wallpaper strength also hides detail.

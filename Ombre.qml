@@ -76,6 +76,33 @@ Item {
   property string glassColor: "auto"   // "auto" follows each terminal's look, or #rrggbb
   property int glassTint: Palette.GLASS_TINT
   property int glassBlur: Palette.GLASS_BLUR
+  property var glassOverrides: ({})
+  readonly property var selectedGlass: glassFor(selectedTerm)
+
+  function glassFor(term) {
+    var host = term && term.backend === "tmux" ? (term.wallpaperHosts || [])[0] : term
+    return glassOverrides[Workspace.key(host)] || {on: glass, color: glassColor, tint: glassTint, blur: glassBlur}
+  }
+
+  function changeGlass(patch) {
+    var next = Object.assign({}, glassOverrides)
+    var targets = actionTargets
+    for (var i = 0; i < targets.length; i++) {
+      var term = terminals[targets[i]]
+      var hosts = term.backend === "tmux" ? (term.wallpaperHosts || []) : [term]
+      for (var h = 0; h < hosts.length; h++) {
+        if (!hosts[h].wallpaperReady || hosts[h].backend === "omaguake") continue
+        next[Workspace.key(hosts[h])] = Object.assign({}, glassFor(hosts[h]), patch)
+      }
+    }
+    glassOverrides = next
+    saveConfig()
+    for (var j = 0; j < targets.length; j++) {
+      var t = terminals[targets[j]]
+      if (t.wallpaperReady) sendWallpaper(t, t.wallpaper)
+    }
+    return "ok"
+  }
   property var hiddenSources: []     // wallpaper paths hidden from the strips (files untouched)
   property bool showHidden: false
   property bool reshadowAll: false
@@ -339,7 +366,7 @@ Item {
       moods: root.catalog.modes.map(function (m) { return m.id }),
       themes: root.catalog.themes.map(function (t) { return t.id }),
       wallpapers: root.wallpaperChoices,
-      glass: { on: root.glass, color: root.glassColor, tint: root.glassTint, blur: root.glassBlur },
+      glass: root.selectedGlass,
       imageSources: root.imageSources.map(function (p) {
         var s = root.imageScan[p]
         return { path: p, kind: s ? s.kind : "reading", count: s ? s.images.length : 0 }
@@ -398,47 +425,23 @@ Item {
 
   // Glass is a Ghostty shader too: Claude's message band, Codex blocks and any
   // other cell background become frosted, darkened glass over the wallpaper.
-  function setGlass(enabled) {
-    root.glass = enabled === true || enabled === "true"
-    root.saveConfig()
-    root.reshadowAll = true
-    root.scan()
-    return "ok"
-  }
-
-  // Glass colour: "auto", a swatch name (smoke, red, blue, ...) or #rrggbb.
+  function setGlass(enabled) { return changeGlass({on: enabled === true || enabled === "true"}) }
   function setGlassColor(value) {
     var c = Palette.glassColor(value)
     if (!c) return "error: glass colour is auto, a colour name or #rrggbb"
-    root.glassColor = c
-    root.applyGlassSettings()
-    return "ok"
+    return changeGlass({color: c})
   }
-
-  function setGlassTint(value) { root.glassTint = Palette.glassLevel(value, 100, root.glassTint); root.applyGlassSettings(); return "ok" }
-  function setGlassBlur(value) { root.glassBlur = Palette.glassLevel(value, 60, root.glassBlur); root.applyGlassSettings(); return "ok" }
-
-  function resetGlass() {
-    root.glassColor = "auto"
-    root.glassTint = Palette.GLASS_TINT
-    root.glassBlur = Palette.GLASS_BLUR
-    root.applyGlassSettings()
-    return "ok"
-  }
-
-  function applyGlassSettings() {
-    root.saveConfig()
-    if (!root.glass) return
-    root.reshadowAll = true
-    root.scan()
-  }
+  function setGlassTint(value) { return changeGlass({tint: Palette.glassLevel(value, 100, selectedGlass.tint)}) }
+  function setGlassBlur(value) { return changeGlass({blur: Palette.glassLevel(value, 60, selectedGlass.blur)}) }
+  function resetGlass() { return changeGlass({color: "auto", tint: Palette.GLASS_TINT, blur: Palette.GLASS_BLUR}) }
 
   // The shader token for a window's Ghostty config: dark, light or - for the
   // text shadow; with Glass on, glass:RRGGBB:TINT:BLUR plus -dark or -light.
   function shadowVariant(term) {
     var bg = (term && Palette.lookBackground(term.look, root.themeBackground)) || root.themeBackground
     var shadow = root.textShadow ? (Palette.isLight(bg) ? "light" : "dark") : "-"
-    return root.glass ? Palette.glassToken(root.glassColor, root.glassTint, root.glassBlur, bg, shadow) : shadow
+    var settings = root.glassFor(term)
+    return settings.on ? Palette.glassToken(settings.color, settings.tint, settings.blur, bg, shadow) : shadow
   }
 
   // Omarchy dims every window a little (0.985 focused, 0.96 not), which lets the desktop
@@ -884,14 +887,21 @@ Item {
       try {
         var extra = JSON.parse(output.slice(f + 14))
         var panes = extra.sessions || []
+        for (var hi = 0; hi < list.length; hi++) list[hi].started = extra.starts[list[hi].pid] || ""
         var clientPtys = []
         for (var p = 0; p < panes.length; p++) clientPtys = clientPtys.concat(panes[p].clientPtys || [])
         for (var h = 0; h < panes.length; h++) {
           var pane = panes[h]
           if (pane.backend !== "tmux") continue
-          pane.wallpaperHosts = list.filter(function (host) {
-            return host.wallpaperReady && (pane.clientPtys || []).indexOf(host.pty) >= 0
-          })
+          var hosts = list.filter(function (host) { return (pane.clientPtys || []).indexOf(host.pty) >= 0 })
+          var visual = hosts.filter(function(host) { return host.focused })[0]
+            || hosts.filter(function(host) { return host.visible })[0] || hosts[0]
+          pane.visible = !!visual && visual.visible
+          if (visual) {
+            for (var field of ["monitor", "lx", "ly", "x", "y", "w", "h", "workspace"]) pane[field] = visual[field]
+            pane.hostAddress = visual.address
+          }
+          pane.wallpaperHosts = hosts.filter(function(host) { return host.wallpaperReady })
           pane.wallpaperReady = pane.wallpaperHosts.length > 0
           if (pane.wallpaperReady) pane.wallpaper = pane.wallpaperHosts[0].wallpaper
         }
@@ -1802,7 +1812,7 @@ Item {
     root.configDirty = false
     configWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$(dirname "$1")" && tmp=$(mktemp "$1.XXXXXX") && { printf "%s\\n" "$2" > "$tmp" && mv -f "$tmp" "$1"; }',
       "sh", root.configFile, JSON.stringify({
-        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, glass: root.glass, glassColor: root.glassColor, glassTint: root.glassTint, glassBlur: root.glassBlur, strength: root.strength, blur: root.blur,
+        borders: root.borders, pulse: root.pulse, solid: root.solid, textShadow: root.textShadow, glassOverrides: root.glassOverrides, glass: root.glass, glassColor: root.glassColor, glassTint: root.glassTint, glassBlur: root.glassBlur, strength: root.strength, blur: root.blur,
         hiddenSources: root.hiddenSources,
         imageSources: root.imageSources, collapsedFolders: root.collapsedFolders, browseFolder: root.browseFolder,
         withWallpaper: root.withWallpaper, welcomed: root.welcomed, newTerminals: root.newDefault,
@@ -1827,6 +1837,7 @@ Item {
       if (cfg && typeof cfg.solid === "boolean") root.solid = cfg.solid
       if (cfg && typeof cfg.textShadow === "boolean") root.textShadow = cfg.textShadow
       if (cfg && typeof cfg.glass === "boolean") root.glass = cfg.glass
+      if (cfg && cfg.glassOverrides && typeof cfg.glassOverrides === "object") root.glassOverrides = cfg.glassOverrides
       if (cfg && Palette.glassColor(cfg.glassColor)) root.glassColor = Palette.glassColor(cfg.glassColor)
       if (cfg && typeof cfg.glassTint === "number") root.glassTint = Palette.glassLevel(cfg.glassTint, 100, Palette.GLASS_TINT)
       if (cfg && typeof cfg.glassBlur === "number") root.glassBlur = Palette.glassLevel(cfg.glassBlur, 60, Palette.GLASS_BLUR)
@@ -2806,7 +2817,7 @@ Item {
           else if (k === Qt.Key_P && !ctrl) root.setPulse(!root.pulse)
           else if (k === Qt.Key_O && !ctrl) root.setSolid(!root.solid)
           else if (k === Qt.Key_T && !ctrl) root.setTextShadow(!root.textShadow)
-          else if (k === Qt.Key_G && !ctrl) root.setGlass(!root.glass)
+          else if (k === Qt.Key_G && !ctrl) root.setGlass(!root.selectedGlass.on)
           else if (root.view === "settings") {
             if (k === Qt.Key_Escape || k === Qt.Key_Backspace || k === Qt.Key_Comma) root.view = "style"
             else if (k === Qt.Key_Return || k === Qt.Key_Enter) root.dismiss()
@@ -4071,14 +4082,14 @@ Item {
                             id: glassSwitch
                             anchors.right: parent.right
                             options: [{ id: "on", label: "On" }, { id: "off", label: "Off" }]
-                            current: root.glass ? "on" : "off"
+                            current: root.selectedGlass.on ? "on" : "off"
                             onPicked: function (id) { root.setGlass(id === "on") }
                           }
                         }
                         Text {
                           width: parent.width
                           wrapMode: Text.WordWrap
-                          text: "Claude’s message band and other coloured blocks become frosted glass over the wallpaper."
+                          text: "Applies to the selected terminal’s window. Lower Tint reveals more wallpaper; wallpaper strength also controls visibility."
                           color: root.muted
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption
@@ -4089,7 +4100,7 @@ Item {
                           spacing: Style.space(8)
                           TextButton {
                             label: "Auto"
-                            chosen: root.glassColor === "auto"
+                            chosen: root.selectedGlass.color === "auto"
                             onActivated: root.setGlassColor("auto")
                             HoverHandler { onHoveredChanged: root.hoverText = hovered ? "Auto: each terminal’s glass takes its own look’s colour" : "" }
                           }
@@ -4101,8 +4112,8 @@ Item {
                               height: width
                               radius: width / 2
                               color: modelData.hex
-                              border.width: root.glassColor === modelData.hex ? Math.max(2, Style.space(2)) : Math.max(1, Style.space(1))
-                              border.color: root.glassColor === modelData.hex ? root.text : root.subtle
+                              border.width: root.selectedGlass.color === modelData.hex ? Math.max(2, Style.space(2)) : Math.max(1, Style.space(1))
+                              border.color: root.selectedGlass.color === modelData.hex ? root.text : root.subtle
                               MouseArea {
                                 anchors.fill: parent
                                 hoverEnabled: true
@@ -4114,7 +4125,7 @@ Item {
                             }
                           }
                           ColorField {
-                            value: root.glassColor === "auto" ? "" : root.glassColor
+                            value: root.selectedGlass.color === "auto" ? "" : root.selectedGlass.color
                             onApplied: function (value) { root.setGlassColor(value) }
                           }
                         }
@@ -4130,7 +4141,7 @@ Item {
                             maximum: 100
                             step: 1
                             integer: true
-                            value: root.glassTint
+                            value: root.selectedGlass.tint
                             fillColor: root.accent
                             knobColor: root.accent
                             onReleased: function (value) { root.setGlassTint(value) }
@@ -4150,7 +4161,7 @@ Item {
                             maximum: 60
                             step: 1
                             integer: true
-                            value: root.glassBlur
+                            value: root.selectedGlass.blur
                             fillColor: root.accent
                             knobColor: root.accent
                             onReleased: function (value) { root.setGlassBlur(value) }
@@ -4617,7 +4628,7 @@ Item {
                         detail: "Coloured blocks become frosted glass over the wallpaper. Its colour, tint and blur are in the Wallpaper tab."
                         key: "G"
                         checked: root.glass
-                        onToggled: root.setGlass(!root.glass)
+                        onToggled: root.setGlass(!root.selectedGlass.on)
                       }
                     }
                   }

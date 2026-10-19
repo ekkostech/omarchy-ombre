@@ -1,3 +1,8 @@
+## 2.2.2
+
+- Restore tmux selector spotlight from host window geometry.
+- Scope Glass controls to selected host windows; preserve legacy defaults for existing windows.
+
 ## 2.2.1
 
 - Forward tmux wallpaper controls to attached wallpaper-ready Ghostty windows, preserving host-wide wallpaper state and independent pane palettes.

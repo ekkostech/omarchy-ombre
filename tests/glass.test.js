@@ -163,23 +163,24 @@ ShellRoot {
  Timer {
   interval: 200; running: true
   onTriggered: {
-   var plain = {pid: "1", pty: "pts/9", look: null, wallpaper: null}
-   var red = {pid: "2", pty: "pts/8", look: Palette.tintLook("red"), wallpaper: null}
+   var plain = {title:"plain",visible:false,ghostty:true,pid: "1", pty: "pts/9", look: null, wallpaper: null}
+   var red = {title:"red",visible:false,ghostty:true,pid: "2", pty: "pts/8", wallpaperReady:true, look: Palette.tintLook("red"), wallpaper: null}
    check(picker.shadowVariant(plain) === "-", "plain: " + picker.shadowVariant(plain))
-   check(picker.setGlass(true) === "ok" && picker.glass && picker.reshadowAll, "setGlass did not take")
+   picker.terminals=[plain,red];picker.current=1;picker.searchText="";picker.workspaceOnly=false
+   check(picker.setGlass(true) === "ok" && picker.selectedGlass.on && !picker.glass, "setGlass changed global defaults")
    var redBg = Palette.lookBackground(red.look, picker.themeBackground).slice(1).toLowerCase()
    check(picker.shadowVariant(red) === "glass:" + redBg + ":86:36", "auto should follow the look: " + picker.shadowVariant(red))
-   check(picker.shadowVariant(plain) !== picker.shadowVariant(red), "auto gave two looks the same glass")
-   check(picker.setGlassColor("purple") === "ok" && picker.glassColor === Palette.glassColor("purple"), "swatch name")
-   check(picker.setGlassColor("nope").indexOf("error") === 0 && picker.glassColor === Palette.glassColor("purple"), "bad colour changed the setting")
+   check(picker.shadowVariant(plain) === "-", "selected glass changed another window")
+   check(picker.setGlassColor("purple") === "ok" && picker.selectedGlass.color === Palette.glassColor("purple"), "swatch name")
+   check(picker.setGlassColor("nope").indexOf("error") === 0 && picker.selectedGlass.color === Palette.glassColor("purple"), "bad colour changed the setting")
    picker.setGlassColor("#2A1040"); picker.setGlassTint(150); picker.setGlassBlur("12")
    picker.textShadow = true
    check(/^glass:2a1040:100:12-(dark|light)$/.test(picker.shadowVariant(red)), "fixed colour with shadow: " + picker.shadowVariant(red))
    picker.setGlassBlur("abc")
-   check(picker.glassBlur === 12, "bad blur changed the setting")
+   check(picker.selectedGlass.blur === 12, "bad blur changed the setting")
    check(JSON.parse(picker.looks("")).glass.color === "#2a1040", "looks() lacks glass")
    picker.resetGlass()
-   check(picker.glassColor === "auto" && picker.glassTint === 86 && picker.glassBlur === 36, "reset")
+   check(picker.selectedGlass.color === "auto" && picker.selectedGlass.tint === 86 && picker.selectedGlass.blur === 36, "reset")
    picker.setGlass("false")
    check(/^(dark|light)$/.test(picker.shadowVariant(plain)), "shadow alone: " + picker.shadowVariant(plain))
    picker.onConfig(JSON.stringify({glass: true, glassColor: "#112233", glassTint: 40, glassBlur: 0}))
