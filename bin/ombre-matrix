@@ -20,5 +20,8 @@ def main():
         fd,tmp=tempfile.mkstemp(prefix='.matrix-',dir=folder)
         with os.fdopen(fd,'w') as f:f.write(text)
         os.replace(tmp,target)
+    old=sorted(folder.glob(a.pid+'-matrix-*.glsl'),key=lambda p:p.stat().st_mtime,reverse=True)
+    for candidate in old[8:]:
+        if candidate!=target:candidate.unlink()
     print(target)
 if __name__=='__main__': main()

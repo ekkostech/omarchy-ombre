@@ -87,7 +87,7 @@ Item {
         }
       }
       Text { width: parent.width; color:studio.controller.muted; text:"Ghostty privacy hides the rendered window too. Other terminal types use a desktop curtain that individual-app sharing may bypass.";wrapMode:Text.WordWrap }
-      Text { width: parent.width; wrapMode: Text.WordWrap; text: studio.controller.studioMessage; color: studio.controller.muted }
+      Text { width: parent.width; wrapMode: Text.WordWrap; text: studio.controller.studioMessage+"\n"+studio.controller.sessionMessage; color: studio.controller.muted }
     }
   }
 }

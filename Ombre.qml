@@ -77,6 +77,7 @@ Item {
   property int glassTint: Palette.GLASS_TINT
   property int glassBlur: Palette.GLASS_BLUR
   property bool focusMode: false
+  function setFocusMode(on) {focusMode=on===true || on==="true";scan();return "ok"}
   property bool followSessions: true
   property var privacyKeys: []
   property var scenes: []
@@ -132,7 +133,7 @@ Item {
   function comparePrevious(on) {
     if(on){
       if(comparisonState || !batchPast.length)return
-      comparisonState=terminals.map(function(t){return {key:Workspace.key(t),state:styleState(t)}})
+      comparisonState=terminals.filter(function(t){return batchPast[batchPast.length-1].some(function(p){return p.key===Workspace.key(t)})}).map(function(t){return {key:Workspace.key(t),state:styleState(t)}})
       var previous=batchPast[batchPast.length-1]
     }else{
       if(!comparisonState)return
@@ -145,9 +146,11 @@ Item {
   function styleState(t) {
     return {look:t.look,wallpaper:t.wallpaper,glass:glassFor(t),matrix:matrixFor(t)}
   }
-  function captureBatch() {
+  function captureBatch(indices) {
     if(batchMuted)return
-    batchPast=batchPast.concat([terminals.map(function(t){return {key:Workspace.key(t),state:styleState(t)}})]).slice(-30)
+    var targets=indices || actionTargets
+    if(!targets.length)return
+    batchPast=batchPast.concat([targets.map(function(i){var t=terminals[i];return {key:Workspace.key(t),state:styleState(t)}})]).slice(-30)
     batchFuture=[]
   }
   function applyState(index,state) {
@@ -166,8 +169,9 @@ Item {
   function travelBatch(redo) {
     var source=redo?batchFuture:batchPast
     if(!source.length)return
-    var currentState=terminals.map(function(t){return {key:Workspace.key(t),state:styleState(t)}})
     var snapshot=source[source.length-1]
+    var keys=snapshot.map(function(t){return t.key})
+    var currentState=terminals.filter(function(t){return keys.indexOf(Workspace.key(t))>=0}).map(function(t){return {key:Workspace.key(t),state:styleState(t)}})
     if(redo){batchFuture=source.slice(0,-1);batchPast=batchPast.concat([currentState])}
     else{batchPast=source.slice(0,-1);batchFuture=batchFuture.concat([currentState])}
     batchMuted=true
@@ -225,7 +229,9 @@ Item {
   function deleteScene(name) {scenes=scenes.filter(function(s){return s.name!==name});saveConfig()}
   function restoreScene(name) {
     var scene=scenes.filter(function(s){return s.name===name})[0];if(!scene)return
-    captureBatch();batchMuted=true;var restored=0,missing=0
+    var sceneTargets=[]
+    for(var si=0;si<terminals.length;si++)if(scene.entries.some(function(e){return e.key===Workspace.key(terminals[si])}))sceneTargets.push(si)
+    captureBatch(sceneTargets);batchMuted=true;var restored=0,missing=0
     for(var i=0;i<scene.entries.length;i++){
       var entry=scene.entries[i],index=-1
       for(var j=0;j<terminals.length;j++)if(Workspace.key(terminals[j])===entry.key){index=j;break}
@@ -262,6 +268,7 @@ Item {
       for (var h=0;h<hosts.length;h++) {
         if (!hosts[h].wallpaperReady || hosts[h].backend === "omaguake") continue
         var m=Object.assign({},matrixFor(hosts[h]),patch)
+        m.on=m.on===true;m.paused=m.paused===true
         m.size=Palette.glassLevel(m.size,64,20);m.size=Math.max(8,m.size)
         m.blur=Palette.glassLevel(m.blur,12,1)
         m.opacity=Math.max(0,Math.min(1,Number(m.opacity)||0))
@@ -560,6 +567,7 @@ Item {
       current: root.current,
       borders: root.borders,
       version: root.pluginVersion,
+      sessionMessage:root.sessionMessage,studioMessage:root.studioMessage,
       studio:{focus:root.focusMode,private:root.privacyKeys.length,scenes:root.scenes.length,matrix:root.selectedMatrix},
       selectedCount: root.actionTargets.length,
       filteredCount: root.filteredTerminals.length,
@@ -938,6 +946,7 @@ Item {
     for (var i = 0; i < targets.length; i++) root.commitWithWallpaper(targets[i], look)
   }
   function applyTintTargets(value) {
+    root.captureBatch()
     root.endPreview()
     var targets = root.actionTargets.slice()
     for (var i = 0; i < targets.length; i++) root.commit(targets[i], Palette.layerLook(root.terminals[targets[i]].look, Palette.tintLook(value), "background"))
@@ -948,6 +957,7 @@ Item {
     root.applyTintTargets(value)
   }
   function resetTargets() {
+    root.captureBatch()
     root.endPreview()
     var targets = root.actionTargets.slice()
     for (var i = 0; i < targets.length; i++) root.commit(targets[i], null)
@@ -971,7 +981,7 @@ Item {
     if (at >= 0 && !replace) { root.libraryMessage = "That name is already saved. Use Update on its card to replace it."; return false }
     if (at < 0 && root.savedLooks.length >= 200) { root.libraryMessage = "The library holds up to 200 looks. Remove one before saving another."; return false }
     var state = Workspace.snapshot(root.styleState(term)), next = root.savedLooks.slice()
-    var item = {name: at >= 0 ? next[at].name : name, look: state.look, wallpaper: state.wallpaper, favorite: at >= 0 && next[at].favorite}
+    var item = Object.assign({},state,{name: at >= 0 ? next[at].name : name,favorite: at >= 0 && next[at].favorite})
     if (at >= 0) next[at] = item
     else next.push(item)
     root.savedLooks = next
@@ -1038,6 +1048,7 @@ Item {
     root.recordChange(index, before)
   }
   function applySavedTargets(saved) {
+    root.captureBatch()
     root.endPreview()
     var targets = root.actionTargets.slice(), skipped = 0
     for (var i = 0; i < targets.length; i++) {
@@ -1151,11 +1162,7 @@ Item {
     return list
   }
 
-  function onScan(output) {
-    var list = root.parseScan(output)
-    if (!list) return
-    var previous = Workspace.key(root.selectedTerm)
-    root.terminals = list
+  function followProfiles(list) {
     if(root.followSessions) {
       var followed=Object.assign({},root.followSeen)
       var wasMuted=root.batchMuted;root.batchMuted=true
@@ -1170,6 +1177,14 @@ Item {
       }
       root.followSeen=followed;root.batchMuted=wasMuted
     }
+  }
+
+  function onScan(output) {
+    var list = root.parseScan(output)
+    if (!list) return
+    var previous = Workspace.key(root.selectedTerm)
+    root.terminals = list
+    root.followProfiles(list)
     root.histories = Workspace.prune(root.histories, list)
     root.markedKeys = root.markedKeys.filter(function (k) { return list.some(function (t) { return Workspace.key(t) === k }) })
     for (var pi = 0; pi < list.length; pi++) if (Workspace.key(list[pi]) === previous) root.current = pi
@@ -1683,6 +1698,7 @@ Item {
   }
 
   function setStrength(value) {
+    root.captureBatch()
     root.strength = value
     root.saveConfig()
     var targets = root.actionTargets.slice()
@@ -1693,6 +1709,7 @@ Item {
   }
 
   function setBlur(value) {
+    root.captureBatch()
     root.wallpaperMessage = ""
     root.endPreview()
     root.blur = Palette.normalizeBlur(value)
@@ -2228,13 +2245,13 @@ Item {
     + '      [ "$(cat /proc/$key/comm 2>/dev/null)" = ghostty ] || continue\n'
     + '      cdir=${arg%% *}; rest=${arg#* }; shadow=${rest%% *}; rest=${rest#* }; colors=${rest%% *}; rest=${rest#* }; strength=${rest%% *}; rest=${rest#* }; blur=${rest%% *}; path=${rest#* }\n'
     + '      case $cdir in /*/ghostty/) ;; *) continue ;; esac\n'
-    + "      matrix=; case $shadow in matrix:*) matrix=${shadow%%~*}; shadow=${shadow#*~} ;; esac\n"
+    + "      matrixAnimation=always; matrix=; case $shadow in matrix:*) matrix=${shadow%%~*}; shadow=${shadow#*~} ;; esac\n"
     + '      glass=; case $shadow in glass*)\n'
     + '        glass=${shadow%%-*}; case $shadow in *-dark) shadow=dark ;; *-light) shadow=light ;; *) shadow=- ;; esac\n'
     + '        ;;\n'
     + '      esac\n'
     + '      [ -d "$cdir" ] && [ ! -L "${cdir%/}" ] && [ -O "$cdir" ] || continue\n'
-    + "      if [ -n \"$matrix\" ]; then matrix=$(python3 -I \"$plug/bin/ombre-matrix\" --dir \"$cdir\" --pid \"$key\" --settings \"${matrix#matrix:}\") || continue; fi\n"
+    + "      if [ -n \"$matrix\" ]; then settings=${matrix#matrix:}; old=$IFS; IFS=:; set -- $settings; IFS=$old; [ \"${6:-0}\" = 1 ] && matrixAnimation=false; matrix=$(python3 -I \"$plug/bin/ombre-matrix\" --dir \"$cdir\" --pid \"$key\" --settings \"${matrix#matrix:}\") || continue; fi\n"
     + '      if [ -n "$glass" ]; then\n'
     + '        old=$IFS; IFS=:; set -- $glass; IFS=$old; glass=\n'
     + '        if [ "$strength" != "-" ]; then glass=$(python3 -I "$plug/bin/ombre-glass" --dir "$cdir" --pid "$key" --color "${2:-000000}" --tint "${3:-86}" --blur "${4:-36}") || glass=; fi\n'
@@ -2257,7 +2274,7 @@ Item {
     + '          printf "custom-shader = \\"%s/shaders/text-shadow-%s.glsl\\"\\n" "$plug" "$shadow" ;;\n'
     + '        esac\n'
     + '        case $glass$shadow in /*|dark|light) echo "custom-shader-animation = false" ;; esac\n'
-    + "        if [ -n \"$matrix\" ]; then echo \"custom-shader-animation = always\"; fi\n"
+    + "        if [ -n \"$matrix\" ]; then echo \"custom-shader-animation = $matrixAnimation\"; fi\n"
     + '        if [ "$strength" != "-" ]; then\n'
     + '          printf "background-image = \\"%s\\"\\n" "$path"\n'
     + '          echo "background-image-fit = cover"\n'
@@ -2967,7 +2984,7 @@ Item {
       id: spot
       required property var modelData
       screen: modelData
-      visible: root.opened || root.focusMode
+      visible: root.opened || (root.focusMode && root.terminals.some(function(t){return t.address === root.activeAddress || t.hostAddress === root.activeAddress}))
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore

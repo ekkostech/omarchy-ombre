@@ -240,7 +240,13 @@ def action(req):
     elif op == 'restore-layout':
         layout=req.get('layout', '')
         if layout:
-            if not isinstance(layout,str) or len(layout)>8000 or not re.fullmatch(r'[0-9a-fA-Fx,{}\[\]-]+',layout):
+            if not isinstance(layout,str) or len(layout)>8000 or any(c in layout for c in ('\n','\r','\x00')):
+                raise ValueError('Invalid tmux layout')
+            if layout.startswith('{'):
+                parsed=json.loads(layout)
+                if not isinstance(parsed,dict) or parsed.get('V')!=2 or not isinstance(parsed.get('L'),dict):
+                    raise ValueError('Invalid tmux layout')
+            elif not re.fullmatch(r'[0-9a-fA-Fx,{}\[\]-]+',layout):
                 raise ValueError('Invalid tmux layout')
             tmux(sock,'select-layout','-t',term['window'],layout,required=True)
         address=req.get('hostAddress') or term['hostAddress']

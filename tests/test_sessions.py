@@ -31,6 +31,13 @@ class SessionsTest(unittest.TestCase):
     def panes(self):
         return adapter.discover()
 
+    def test_restore_current_tmux_layout(self):
+        a=self.panes()[0]
+        adapter.action({'op':'restore-layout','sessionId':a['sessionId'],'layout':a['layout']})
+        self.assertEqual(len(self.panes()),2)
+        with self.assertRaises(ValueError):
+            adapter.action({'op':'restore-layout','sessionId':a['sessionId'],'layout':'invalid layout'})
+
     def test_profiles_and_signals_are_pane_local(self):
         a,b=self.panes()
         profile={'look':None,'wallpaper':None,'glass':{'on':True,'tint':55},'matrix':{'on':True,'size':24}}
