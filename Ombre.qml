@@ -239,11 +239,12 @@ Item {
 
   // Why the selected terminal can't take a wallpaper, or "" when it can.
   readonly property string wallpaperBlocker: {
-    if (!catalogLoaded) return ""
+    if (!catalogLoaded || (selectedTerm && selectedTerm.wallpaperReady)) return ""
     if (selectedTerm && selectedTerm.backend === "omaguake") return "Install the renderer bridge: ombre setup-omaguake. Then restart the shell."
     if (!catalog.ghostty) return "Wallpapers need Ghostty. Install it and make it your terminal with: omarchy install terminal ghostty"
     if (!catalog.launcher) return "Wallpapers need Ghostty windows opened through Ombre's launcher."
     if (!selectedTerm) return ""
+    if (selectedTerm.backend === "tmux") return "Attach this session in a Ghostty window opened through Ombre’s launcher. Wallpapers cover the entire host window."
     if (!selectedTerm.ghostty) return "This window is " + (selectedTerm.cls || "not Ghostty") + ". Wallpapers work in Ghostty windows; open one with Super+Return."
     if (!selectedTerm.wallpaperReady) return "This Ghostty window opened before wallpapers were set up. New Ghostty windows can take one."
     return ""
@@ -885,6 +886,15 @@ Item {
         var panes = extra.sessions || []
         var clientPtys = []
         for (var p = 0; p < panes.length; p++) clientPtys = clientPtys.concat(panes[p].clientPtys || [])
+        for (var h = 0; h < panes.length; h++) {
+          var pane = panes[h]
+          if (pane.backend !== "tmux") continue
+          pane.wallpaperHosts = list.filter(function (host) {
+            return host.wallpaperReady && (pane.clientPtys || []).indexOf(host.pty) >= 0
+          })
+          pane.wallpaperReady = pane.wallpaperHosts.length > 0
+          if (pane.wallpaperReady) pane.wallpaper = pane.wallpaperHosts[0].wallpaper
+        }
         list = list.filter(function (t) { return clientPtys.indexOf(t.pty) < 0 })
         for (var n = 0; n < list.length; n++) {
           list[n].started = extra.starts[list[n].pid] || ""
@@ -1248,7 +1258,14 @@ Item {
   function persist(term) {
     if (term.sessionId) {
       root.sessionStyle(term, term.look, true)
-      if (term.wallpaperReady) root.sessionAction({op: "wallpaper", sessionId: term.sessionId,
+      if (term.backend === "tmux") {
+        var hosts = term.wallpaperHosts || []
+        for (var h = 0; h < hosts.length; h++) {
+          var host = Object.assign({}, hosts[h], {wallpaper: term.wallpaper})
+          root.persist(host)
+        }
+      }
+      if (term.wallpaperReady && term.backend === "omaguake") root.sessionAction({op: "wallpaper", sessionId: term.sessionId,
         wallpaper: term.wallpaper, persist: true,
         background: Palette.lookBackground(term.look, root.themeBackground) || root.themeBackground})
     }
@@ -1328,6 +1345,11 @@ Item {
   // pid really is Ghostty before signalling it.
   function sendWallpaper(term, wallpaper) {
     var w = Palette.normalizeWallpaper(wallpaper)
+    if (term.backend === "tmux") {
+      var hosts = term.wallpaperHosts || []
+      for (var h = 0; h < hosts.length; h++) root.sendWallpaper(hosts[h], w)
+      return
+    }
     if (term.backend === "omaguake") {
       root.sessionAction({op: "wallpaper", sessionId: term.sessionId, wallpaper: w,
         background: Palette.lookBackground(term.look, root.themeBackground) || root.themeBackground})

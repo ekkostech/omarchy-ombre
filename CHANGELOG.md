@@ -1,3 +1,7 @@
+## 2.2.1
+
+- Forward tmux wallpaper controls to attached wallpaper-ready Ghostty windows, preserving host-wide wallpaper state and independent pane palettes.
+
 ## 2.2.0 — Omaguake wallpapers
 
 - Add a reversible, version-checked Omaguake 0.9.10 renderer bridge.

@@ -29,7 +29,8 @@ ShellRoot {
   function scan() {}
   function sessionAction(req) { sent=sent.concat([req]) }
   function saveConfig() {}
-  function send(line) { throw new Error("session used window PTY writer") }
+  property var writes: []
+  function send(line) { writes=writes.concat([line]) }
   function paintBorder(term,look) {}
   function checkAgentThemes(action) {}
  }
@@ -42,6 +43,7 @@ ShellRoot {
    var parsed=picker.parseScan(scan)
    check(parsed.length===2,"session marker parsing failed")
    picker.terminals=parsed; picker.current=0
+   picker.sent=[]; picker.writes=[]
    picker.labelSession("API")
    check(picker.selectedTerm.label==="API" && picker.sent[0].op==="label","label not targeted")
    picker.searchText="API node"
@@ -57,6 +59,17 @@ ShellRoot {
    picker.terminals=[c];picker.current=0;picker.labelSession("Local")
    check(picker.sessionLabels[Workspace.key(c)]==="Local","window label not persisted")
    check(Workspace.key(c)!==Workspace.key(Object.assign({},c,{started:"9999"})),"reused process inherits identity")
+   check(picker.writes.length===0,"ordinary pane styling wrote to host")
+   var host={pid:"999",pty:"pts/90",confDir:"/tmp/ghostty/",wallpaperReady:true,look:null}
+   var attached=Object.assign({},a,{wallpaperReady:true,wallpaperHosts:[host],wallpaper:{path:"/tmp/image.png",strength:0.4,blur:8}})
+   picker.sendWallpaper(attached,attached.wallpaper)
+   check(picker.writes[0].indexOf("ghostty 999 /tmp/ghostty/ ")===0,"wallpaper did not target host process")
+   check(picker.writes[0].indexOf("0.4 8 /tmp/image.png")>0,"wallpaper controls lost")
+   picker.persist(attached)
+   check(picker.writes.some(function(line){return line.indexOf("save pts/90 ")===0}),"host wallpaper not persisted")
+   check(!picker.sent.some(function(req){return req.op==="wallpaper"}),"ordinary tmux sent Omaguake action")
+   picker.sendWallpaper(attached,null)
+   check(picker.writes[picker.writes.length-1].endsWith("- 0 -"),"reset not forwarded")
    picker.projects=[]
    console.log("OMBRE_SESSIONS_QT_PASS")
    Qt.quit()

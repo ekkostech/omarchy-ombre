@@ -360,3 +360,7 @@ the chosen image and controls persist on the tmux pane across shell reloads.
 Blur uses the existing `python-pillow` dependency and cached derivatives; original
 images are never edited. Ordinary tmux panes still have colors only. Ghostty's
 glass shader and text shadows are not implemented by this bridge.
+
+### Tmux wallpapers (2.2.1)
+
+Attached tmux entries forward wallpaper, strength and blur controls to their wallpaper-ready Ghostty host windows. The wallpaper belongs to the entire host window, shared by its panes and sessions. Detached sessions and hosts opened without Ombre wallpaper configuration cannot render one. Pane colors remain independent.
