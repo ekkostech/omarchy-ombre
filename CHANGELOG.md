@@ -1,3 +1,9 @@
+## 2.4.0
+
+- Add opt-in Stay running controls: launch selected desktop apps at login and restart them after exit.
+- Adopt existing instances, preserve apps when supervision is disabled, and back off failed starts.
+- Expose app state and desktop-unavailable status in Settings and `ombre keep-running`.
+
 ## 2.3.0
 
 - Add Studio: animated Matrix rain with size, blur, opacity, speed, density and pause.

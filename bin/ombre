@@ -2,6 +2,8 @@
 # ombre: script the Ombre plugin from a shell or a keybinding.
 #
 #   ombre                      open the picker
+#   ombre keep-running list|add|on|off|remove APP.desktop [WINDOW_CLASS]
+#                            start selected desktop apps at login and keep them running
 #   ombre studio               Matrix, focus, privacy, scenes and session map
 #   ombre matrix on|off|pause|resume|size N|blur N|opacity N|speed N|density N
 #   ombre signal STATUS PID     working, done, input or error for a session
@@ -80,6 +82,16 @@ case ${1:-} in
   setup-omaguake)
     shift
     exec python3 "$(dirname "$(readlink -f "$0")")/ombre-setup-omaguake" "$@" ;;
+  keep-running)
+    case ${2:-list} in
+      list) payload='{"op":"status"}' ;;
+      add|on|off)
+        payload=$(jq -nc --arg id "${3:?provide a desktop app ID, such as chatgpt.desktop}" --arg action "$2" '{op:"set",id:$id,enabled:($action!="off")}')
+        if [[ $# -ge 4 ]]; then payload=$(jq -c --arg class "$4" '. + {class:$class}' <<< "$payload"); fi ;;
+      remove) payload=$(jq -nc --arg id "${3:?provide the desktop app ID}" '{op:"remove",id:$id}') ;;
+      *) echo "keep-running: list|add|on|off|remove APP.desktop [WINDOW_CLASS]" >&2; exit 1 ;;
+    esac
+    exec python3 -I "$(dirname "$(readlink -f "$0")")/ombre-keep-running" request "$payload" ;;
   studio)
     call open '{"studio":true}'; exit ;;
   matrix)

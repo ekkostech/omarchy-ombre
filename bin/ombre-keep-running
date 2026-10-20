@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Opt-in desktop application supervision for Ombre. Never replay shell jobs."""
+import fcntl
+import json
+import os
+import re
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+GENERIC = {'env', 'sh', 'bash', 'zsh', 'fish', 'python', 'python3', 'node', 'electron',
+           'flatpak', 'snap', 'gio', 'gtk-launch', 'java', 'wine', 'wine64'}
+GRACE = 45
+STABLE = 60
+MAX_DELAY = 600
+
+
+def paths():
+    home = Path.home()
+    config = Path(os.environ.get('XDG_CONFIG_HOME', home / '.config')) / 'omarchy/ombre-running.json'
+    runtime = Path(os.environ.get('XDG_RUNTIME_DIR', os.environ.get('XDG_STATE_HOME', home / '.local/state'))) / 'ombre/keep-running'
+    return config, runtime
+
+
+def read_json(path, default):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+
+
+def atomic_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream, ensure_ascii=False)
+            stream.write('\n')
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def load_config():
+    value = read_json(paths()[0], {'version': 1, 'apps': []})
+    if not isinstance(value, dict) or value.get('version') != 1 or not isinstance(value.get('apps'), list):
+        raise ValueError('Invalid Stay running settings; fix ombre-running.json before enabling apps.')
+    apps = value['apps']
+    if len(apps) > 32:
+        raise ValueError('Stay running supports up to 32 selected apps.')
+    seen = set()
+    for entry in apps:
+        if (not isinstance(entry, dict) or not valid_id(entry.get('id')) or entry['id'] in seen
+                or type(entry.get('enabled')) is not bool or not valid_class(entry.get('class', ''))):
+            raise ValueError('Invalid Stay running app entry.')
+        seen.add(entry['id'])
+    return value
+
+
+def valid_id(value):
+    return isinstance(value, str) and value.endswith('.desktop') and len(value) < 256 and '/' not in value and '\\' not in value and not any(ord(c) < 32 for c in value)
+
+
+def valid_class(value):
+    return isinstance(value, str) and len(value) <= 256 and not any(ord(c) < 32 for c in value)
+
+
+def catalog():
+    from gi.repository import Gio
+    try:
+        from gi.repository import GioUnix
+        desktop_type = GioUnix.DesktopAppInfo
+    except ImportError:
+        desktop_type = Gio.DesktopAppInfo
+    result = {}
+    for app in Gio.AppInfo.get_all():
+        ident = app.get_id()
+        if not valid_id(ident) or not isinstance(app, desktop_type) or not app.should_show() or app.get_boolean('Terminal'):
+            continue
+        result[ident] = {'id': ident, 'name': app.get_display_name(), 'file': app.get_filename(),
+                         'class': app.get_startup_wm_class() or '', 'executable': app.get_executable() or ''}
+    return result
+
+
+def desktop_windows():
+    # A missing compositor (logout, shutdown or an IPC failure) is not an app exit.
+    if not os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
+        return None
+    try:
+        proc = subprocess.run(['hyprctl', '-j', 'clients'], capture_output=True, text=True, timeout=5)
+        value = json.loads(proc.stdout) if proc.returncode == 0 else None
+        if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+            return None
+        return value
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def processes():
+    found = set()
+    for path in Path('/proc').iterdir():
+        if not path.name.isdigit():
+            continue
+        try:
+            if path.stat().st_uid != os.getuid():
+                continue
+            # Compare only executable identities; never store command lines or prompts.
+            exe = os.readlink(path / 'exe').removesuffix(' (deleted)')
+            found.update((exe.casefold(), Path(exe).name.casefold()))
+            argv0 = (path / 'cmdline').read_bytes().split(b'\0', 1)[0].decode(errors='replace')
+            found.add(argv0.casefold())
+        except OSError:
+            continue
+    return found
+
+
+def is_running(entry, app, windows, procs):
+    custom = entry.get('class', '').casefold()
+    matches = {custom} if custom else {app['class'].casefold(), app['id'][:-8].casefold()}
+    executable = app['executable']
+    if not custom and executable:
+        matches.add(Path(executable).name.casefold())
+    matches.discard('')
+    if any(str(w.get(k, '')).casefold() in matches for w in windows for k in ('class', 'initialClass')):
+        return True
+    if custom:
+        return False
+    name = Path(executable).name.casefold()
+    if name and name not in GENERIC and not re.fullmatch(r'(python|electron|java|node)[0-9.]*', name):
+        resolved = shutil.which(executable)
+        candidates = {executable.casefold(), name}
+        if resolved:
+            candidates.add(str(Path(resolved).resolve()).casefold())
+        return bool(candidates & procs)
+    return False
+
+
+def launch(app):
+    # GIO implements Desktop Entry quoting, field codes and D-Bus activation.
+    proc = subprocess.run(['gio', 'launch', app['file']], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+                          timeout=15, start_new_session=True)
+    if proc.returncode:
+        raise RuntimeError('Application launcher exited with code ' + str(proc.returncode))
+
+
+def tick(entry, app, old, windows, procs, now, start=launch, before_start=None):
+    state = dict(old)
+    state.update(id=entry['id'], name=app['name'] if app else entry['id'], enabled=entry['enabled'])
+    if not entry['enabled']:
+        return dict(id=entry['id'], name=state['name'], enabled=False, status='Off', attempts=0)
+    if app is None:
+        state.update(status='Application is unavailable', error='Reinstall the app or remove this entry.')
+        return state
+    if windows is None:
+        state['status'] = 'Waiting for desktop'
+        return state
+    if is_running(entry, app, windows, procs):
+        since = state.get('running_since', now)
+        state.update(status='Running', running_since=since, error='')
+        if now - since >= STABLE:
+            state.update(attempts=0, next_attempt=0)
+        return state
+    state.pop('running_since', None)
+    next_attempt = min(state.get('next_attempt', 0), now + MAX_DELAY)
+    if now < next_attempt:
+        state.update(status='Starting' if now - state.get('last_attempt', 0) < GRACE and not state.get('error')
+                     else 'Retry in ' + str(max(1, int(next_attempt - now))) + 's')
+        return state
+    attempts = min(int(state.get('attempts', 0)) + 1, 10)
+    state.update(attempts=attempts, last_attempt=now,
+                 next_attempt=now + min(MAX_DELAY, GRACE * 2 ** (attempts - 1)), status='Starting', error='')
+    if before_start is not None:
+        before_start(state)
+    try:
+        start(app)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        state.update(status='Launch failed; retrying shortly', error=str(exc)[:300])
+    return state
+
+
+def change(req):
+    ident = req.get('id')
+    if not valid_id(ident):
+        raise ValueError('Choose an installed application.')
+    config, runtime = paths()
+    config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (config.parent / '.ombre-running.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        value = load_config()
+        entries = value['apps']
+        existing = next((row for row in entries if row['id'] == ident), None)
+        if req['op'] == 'remove':
+            value['apps'] = [row for row in entries if row['id'] != ident]
+        elif req['op'] == 'set':
+            enabled = req.get('enabled', True)
+            match = req.get('class', existing.get('class', '') if existing else '')
+            if type(enabled) is not bool or not valid_class(match):
+                raise ValueError('Invalid app toggle or window class.')
+            if enabled and ident not in catalog():
+                raise ValueError('The selected application is not installed or has no desktop launcher.')
+            row = {'id': ident, 'enabled': enabled, 'class': match.strip()}
+            if existing:
+                entries[entries.index(existing)] = row
+            elif len(entries) < 32:
+                entries.append(row)
+            else:
+                raise ValueError('Remove an entry before adding another app (limit: 32).')
+        else:
+            raise ValueError('Unknown Stay running action.')
+        atomic_json(config, value)
+
+
+def status():
+    apps = catalog()
+    config, runtime = paths()
+    state = read_json(runtime / 'status.json', {})
+    current = time.time()
+    alive = current - state.get('at', 0) < 20
+    entries = []
+    for row in load_config()['apps']:
+        last = state.get('apps', {}).get(row['id'], {})
+        last = last if last.get('enabled') == row['enabled'] else {}
+        entries.append({**row, 'name': apps.get(row['id'], {}).get('name', row['id']),
+                        'status': ('Off' if not row['enabled'] else last.get('status', 'Starting') if alive else 'Waiting for Ombre'),
+                        'error': last.get('error', '') if alive and row['enabled'] else ''})
+    return {'apps': entries, 'available': sorted([{'id': a['id'], 'name': a['name'], 'class': a['class']} for a in apps.values()], key=lambda a: a['name'].casefold()),
+            'watching': alive, 'error': state.get('error', '') if alive else ''}
+
+
+def watch():
+    config, runtime = paths()
+    runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (runtime / 'watch.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        state = read_json(runtime / 'status.json', {})
+        while True:
+            try:
+                entries = load_config()['apps']
+                apps = catalog() if any(row['enabled'] for row in entries) else {}
+                windows = desktop_windows() if apps else None
+                procs = processes() if windows is not None else set()
+                now = time.time()
+                previous = state.get('apps', {})
+                state = {'at': now, 'apps': {row['id']: previous.get(row['id'], {}) for row in entries}}
+                for row in entries:
+                    def remember(attempt):
+                        # Journal intent before spawn, so a shell reload in the launch
+                        # cannot skip the grace period and create a duplicate.
+                        state['apps'][row['id']] = attempt
+                        atomic_json(runtime / 'status.json', state)
+                    state['apps'][row['id']] = tick(row, apps.get(row['id']), previous.get(row['id'], {}),
+                                                   windows, procs, now, before_start=remember)
+            except Exception as exc:
+                # Invalid configuration must not launch apps or terminate the worker.
+                state = {**state, 'at': time.time(), 'error': str(exc)[:300]}
+            atomic_json(runtime / 'status.json', state)
+            time.sleep(3)
+
+
+def main():
+    if sys.argv[1:] == ['watch']:
+        watch()
+        return
+    req = json.loads(sys.argv[2]) if len(sys.argv) == 3 and sys.argv[1] == 'request' else {'op': 'status'}
+    if req.get('op') not in ('status', 'set', 'remove'):
+        raise ValueError('Unknown Stay running action.')
+    if req['op'] != 'status':
+        change(req)
+    print(json.dumps(status()))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as exc:
+        print(json.dumps({'error': str(exc)[:300]}))
+        sys.exit(1)

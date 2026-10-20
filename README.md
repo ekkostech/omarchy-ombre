@@ -406,3 +406,39 @@ CLI Matrix changes target the selected picker terminal:
 `ombre matrix opacity 0.3`, `ombre matrix speed 0.8`,
 `ombre matrix density 0.5`, `ombre matrix pause`, `ombre matrix off`.
 Animated shaders consume GPU time; pause or disable them when desired.
+
+
+## Stay running (2.4)
+
+Open **Settings → Stay running**, find an installed desktop app, then choose
+**Add and keep running**. Ombre starts it at login and restarts it after exit.
+Existing instances are adopted, and disabling or removing an entry leaves the
+app open. This does not replay terminal commands, restore conversations, or
+resume ended agent jobs. An app that remains in the background counts as running.
+
+Ombre must remain enabled (`keepLoaded` is already set in the manifest). Its
+watcher follows the desktop session and pauses launching when Hyprland cannot be
+queried, including logout. It waits at least 45 seconds for a launch and backs off
+repeated failures up to ten minutes. A stable minute of running resets that delay.
+A private runtime lock prevents two watchers launching duplicates after a reload.
+
+Apps come from installed Desktop Entry launchers and are launched through GIO,
+which handles arguments and D-Bus activation. This requires `python-gobject` and
+`glib2` (included on the tested Omarchy installation). No shell command is inferred
+from a running process. Matching uses the app's window class/desktop ID or its
+specific executable; generic runtimes such as Python and Electron are not matched
+by executable alone. Set an exact **Window class override** when an app needs a
+more specific identity; with an override, only matching windows count as running.
+
+```sh
+ombre keep-running list
+ombre keep-running add chatgpt.desktop
+ombre keep-running off chatgpt.desktop
+ombre keep-running on chatgpt.desktop
+ombre keep-running remove chatgpt.desktop
+```
+
+Selections live separately in `~/.config/omarchy/ombre-running.json`; existing
+Ombre appearance settings are unchanged. Restart attempts and status live in the
+private runtime directory. Remove entries before uninstalling Ombre if you want
+to discard the saved selections; unloading the plugin stops its watcher.

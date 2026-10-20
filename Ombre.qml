@@ -412,7 +412,7 @@ Item {
   readonly property var tabNames: ({ saved: "Looks", colours: "Colours", moods: "Moods", themes: "Themes", wallpapers: "Wallpaper" })
   readonly property var settingsSections: [
     { id: "windows", name: "Window effects" }, { id: "agents", name: "Claude + Codex" },
-    { id: "new", name: "New terminals" }, { id: "projects", name: "Project folders" }, { id: "about", name: "About" }]
+    { id: "running", name: "Stay running" }, { id: "new", name: "New terminals" }, { id: "projects", name: "Project folders" }, { id: "about", name: "About" }]
 
   // What a newly opened terminal gets: none, auto (the least-used tint), or a
   // saved look with an optional wallpaper. Terminals already open when the
@@ -2499,6 +2499,37 @@ Item {
       }
     }
   }
+
+
+  property bool keepRunningEnabled: true
+  property var keepRunningState: ({apps: [], available: [], watching: false, error: ""})
+  property string keepRunningMessage: ""
+  readonly property bool keepRunningBusy: keepRunningRequestProcess.running
+  function refreshKeepRunning() { if (!keepRunningBusy) keepRunningRequest({op:"status"}) }
+  function keepRunningRequest(request) {
+    if (keepRunningBusy) return
+    keepRunningMessage = ""
+    keepRunningRequestProcess.command = ["python3", "-I", root.pluginDir + "/bin/ombre-keep-running", "request", JSON.stringify(request)]
+    keepRunningRequestProcess.running = true
+  }
+  function onKeepRunningReply(output) {
+    try {
+      var reply = JSON.parse(output)
+      if (reply.apps && reply.available) keepRunningState = reply
+      else keepRunningMessage = reply.error || "Could not read Stay running settings."
+    } catch (error) { keepRunningMessage = "Could not read Stay running settings. Check Python GObject and GIO are installed." }
+  }
+  Process {
+    id: keepRunningRequestProcess
+    stdout: StdioCollector { onStreamFinished: root.onKeepRunningReply(text) }
+  }
+  Process {
+    id: keepRunningWatcher
+    running: root.keepRunningEnabled
+    command: ["python3", "-I", root.pluginDir + "/bin/ombre-keep-running", "watch"]
+    onExited: if (root.keepRunningEnabled) keepRunningRestart.restart()
+  }
+  Timer { id: keepRunningRestart; interval: 5000; onTriggered: if (root.keepRunningEnabled) keepRunningWatcher.running = true }
 
   Component.onCompleted: { borderProbe.running = true; root.loadCatalog() }
 
@@ -5011,6 +5042,12 @@ Item {
                       }
                     }
                   }
+                }
+
+                StayRunning {
+                  visible: root.settingsSection === "running"
+                  width: parent.width
+                  controller: root
                 }
 
                 // What newly opened terminals get.
